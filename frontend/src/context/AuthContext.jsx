@@ -1,59 +1,62 @@
-import { createContext, useState, useEffect } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../services/api";
+import { AuthContext } from "./AuthContextValue";
 
-export const AuthContext = createContext();
+const getStoredUser = () => {
+  const token = sessionStorage.getItem("token") || localStorage.getItem("token");
+  const role = sessionStorage.getItem("role") || localStorage.getItem("role");
+  const storedUser = sessionStorage.getItem("user");
+
+  if (!token || !role) return null;
+
+  return {
+    token,
+    role,
+    profile: storedUser ? JSON.parse(storedUser) : null,
+  };
+};
 
 export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState(getStoredUser);
   const navigate = useNavigate();
 
-  // Cek apakah ada token setiap kali web di-refresh
-  useEffect(() => {
-    const token = localStorage.getItem("token");
-    const role = localStorage.getItem("role");
-
-    if (token && role) {
-      setUser({ token, role });
-    }
-    setLoading(false);
-  }, []);
-
-  // Fungsi Login
   const login = async (email, password) => {
     try {
       const response = await api.post("/auth/login", { email, password });
-      const { token, role } = response.data;
+      const { token, role, user: profile } = response.data;
 
-      // Simpan ke brankas browser
-      localStorage.setItem("token", token);
-      localStorage.setItem("role", role);
+      sessionStorage.setItem("token", token);
+      sessionStorage.setItem("role", role);
+      sessionStorage.setItem("user", JSON.stringify(profile));
+      localStorage.removeItem("token");
+      localStorage.removeItem("role");
 
-      // Update state React
-      setUser({ token, role });
-      navigate("/"); // Lempar ke halaman utama setelah sukses login
+      setUser({ token, role, profile });
+      navigate("/");
 
       return { success: true };
     } catch (error) {
       return {
         success: false,
-        message: error.response?.data?.error || "Gagal login bro",
+        message: error.toString(),
       };
     }
   };
 
-  // Fungsi Logout
   const logout = () => {
     localStorage.removeItem("token");
     localStorage.removeItem("role");
+    sessionStorage.removeItem("token");
+    sessionStorage.removeItem("role");
+    sessionStorage.removeItem("user");
     setUser(null);
     navigate("/login");
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, loading }}>
-      {!loading && children}
+    <AuthContext.Provider value={{ user, login, logout, loading: false }}>
+      {children}
     </AuthContext.Provider>
   );
 };

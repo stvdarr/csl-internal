@@ -1,5 +1,27 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import api from "../services/api";
+
+const renderDetail = (log) => {
+  if (log.oldStatus || log.newStatus) {
+    return (
+      <div className="flex items-center gap-2">
+        {log.oldStatus && (
+          <span className="line-through text-gray-400">{log.oldStatus}</span>
+        )}
+        {log.oldStatus && log.newStatus && <span className="text-gray-400">-&gt;</span>}
+        {log.newStatus && <strong className="text-green-600">{log.newStatus}</strong>}
+      </div>
+    );
+  }
+
+  if (!log.metadata) return <span className="text-gray-400">-</span>;
+
+  return (
+    <span className="font-mono text-xs text-gray-500">
+      {JSON.stringify(log.metadata)}
+    </span>
+  );
+};
 
 const HistoryLogViewer = () => {
   const [logs, setLogs] = useState([]);
@@ -11,7 +33,7 @@ const HistoryLogViewer = () => {
       try {
         const response = await api.get("/history");
         setLogs(response.data.data);
-      } catch (err) {
+      } catch {
         setError("Gagal memuat log riwayat.");
       } finally {
         setLoading(false);
@@ -21,18 +43,21 @@ const HistoryLogViewer = () => {
     fetchLogs();
   }, []);
 
-  if (loading)
+  if (loading) {
     return (
       <div className="text-gray-600 animate-pulse font-medium">
         Memuat jejak rekam...
       </div>
     );
-  if (error)
+  }
+
+  if (error) {
     return (
       <div className="text-red-600 font-bold p-4 bg-red-50 rounded-md">
         {error}
       </div>
     );
+  }
 
   return (
     <div className="overflow-x-auto border border-gray-200 rounded-lg shadow-sm mt-4">
@@ -40,10 +65,10 @@ const HistoryLogViewer = () => {
         <thead className="bg-gray-800 text-xs font-semibold uppercase text-white border-b border-gray-700">
           <tr>
             <th className="px-6 py-4">Waktu</th>
-            <th className="px-6 py-4">Tipe Data</th>
-            <th className="px-6 py-4">ID Data</th>
-            <th className="px-6 py-4">Diubah Oleh</th>
-            <th className="px-6 py-4">Perubahan Status</th>
+            <th className="px-6 py-4">Aksi</th>
+            <th className="px-6 py-4">Target</th>
+            <th className="px-6 py-4">Aktor</th>
+            <th className="px-6 py-4">Detail</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-200">
@@ -65,27 +90,21 @@ const HistoryLogViewer = () => {
                 <td className="px-6 py-4">
                   <span
                     className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-bold ${
-                      log.recordType === "TAX"
+                      log.targetType === "TAX" || log.recordType === "TAX"
                         ? "bg-blue-100 text-blue-800"
                         : "bg-orange-100 text-orange-800"
                     }`}
                   >
-                    {log.recordType}
+                    {log.actionType || "UPDATED_STATUS"}
                   </span>
                 </td>
                 <td className="px-6 py-4 font-mono text-gray-500">
-                  #{log.recordId}
+                  {log.targetType || log.recordType} #{log.targetId || log.recordId}
                 </td>
                 <td className="px-6 py-4 font-semibold text-gray-900">
                   {log.User?.name || "Sistem"}
                 </td>
-                <td className="px-6 py-4 flex items-center gap-2">
-                  <span className="line-through text-gray-400">
-                    {log.oldStatus}
-                  </span>
-                  <span className="text-gray-400">➔</span>
-                  <strong className="text-green-600">{log.newStatus}</strong>
-                </td>
+                <td className="px-6 py-4">{renderDetail(log)}</td>
               </tr>
             ))
           )}

@@ -8,7 +8,7 @@ const ExcelUploader = ({ activeTab, onUpload }) => {
   const [error, setError] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
 
-  const processExcel = async (file) => {
+  const processExcel = useCallback(async (file) => {
     setIsProcessing(true);
     setError(null);
     setSuccessMsg(null);
@@ -53,14 +53,14 @@ const ExcelUploader = ({ activeTab, onUpload }) => {
       }
 
       const statusHierarchy = {
-        DIBUAT: { level: 1, dbValue: "DIBUAT" },
-        REVIEW: { level: 2, dbValue: "REVIEW" },
-        TTD: { level: 3, dbValue: "TTD" },
-        DIKIRIM: { level: 4, dbValue: "DIKIRIM" },
-        BAYAR: { level: 5, dbValue: "DIBAYAR" },
-        DIBAYAR: { level: 5, dbValue: "DIBAYAR" },
-        LAPOR: { level: 6, dbValue: "LAPOR" },
-        OK: { level: 7, dbValue: "OK" },
+        DIBUAT: { level: 1, dbValue: "NOT_STARTED" },
+        REVIEW: { level: 2, dbValue: "WAITING_REVIEW" },
+        TTD: { level: 3, dbValue: "WAITING_SIGNATURE" },
+        DIKIRIM: { level: 4, dbValue: "WAITING_CLIENT" },
+        BAYAR: { level: 5, dbValue: "PAID" },
+        DIBAYAR: { level: 5, dbValue: "PAID" },
+        LAPOR: { level: 6, dbValue: "FILED" },
+        OK: { level: 7, dbValue: "COMPLETED" },
       };
 
       const bulkDataMap = {};
@@ -85,7 +85,7 @@ const ExcelUploader = ({ activeTab, onUpload }) => {
             bulkDataMap[key] = {
               clientName,
               period,
-              status: "DIBUAT",
+              status: "NOT_STARTED",
               amount: 0,
             };
           }
@@ -105,7 +105,7 @@ const ExcelUploader = ({ activeTab, onUpload }) => {
       }
 
       const finalBulkData = Object.values(bulkDataMap).filter(
-        (data) => data.status !== "DIBUAT" || data.amount > 0,
+        (data) => data.status !== "NOT_STARTED" || data.amount > 0,
       );
 
       if (finalBulkData.length === 0) {
@@ -119,13 +119,13 @@ const ExcelUploader = ({ activeTab, onUpload }) => {
     } finally {
       setIsProcessing(false);
     }
-  };
+  }, [onUpload]);
 
   const onDrop = useCallback((acceptedFiles) => {
     if (acceptedFiles.length > 0) {
       processExcel(acceptedFiles[0]);
     }
-  }, [activeTab]);
+  }, [processExcel]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,

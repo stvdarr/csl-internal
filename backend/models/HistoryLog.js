@@ -1,9 +1,28 @@
-import { DataTypes } from 'sequelize';
-import sequelize from '../config/database.js';
+import { DataTypes } from "sequelize";
+import sequelize from "../config/database.js";
 
-const HistoryLog = sequelize.define('HistoryLog', {
+const HistoryLog = sequelize.define("HistoryLog", {
+    actionType: {
+        type: DataTypes.STRING,
+        allowNull: false,
+        defaultValue: "UPDATED_STATUS"
+    },
+    actorId: {
+        type: DataTypes.INTEGER,
+        allowNull: true
+    },
+    targetType: {
+        type: DataTypes.ENUM("TAX", "TODO", "CLIENT", "USER"),
+        allowNull: false,
+        defaultValue: "TAX"
+    },
+    targetId: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+        defaultValue: 0
+    },
     recordType: {
-        type: DataTypes.ENUM('TAX', 'TODO'),
+        type: DataTypes.ENUM("TAX", "TODO"),
         allowNull: false
     },
     recordId: {
@@ -12,14 +31,18 @@ const HistoryLog = sequelize.define('HistoryLog', {
     },
     oldStatus: {
         type: DataTypes.STRING,
-        allowNull: false
+        allowNull: true
     },
     newStatus: {
         type: DataTypes.STRING,
-        allowNull: false
+        allowNull: true
+    },
+    metadata: {
+        type: DataTypes.JSON,
+        allowNull: true
     }
 }, {
-    tableName: 'history_logs',
+    tableName: "history_logs",
     timestamps: true
 });
 

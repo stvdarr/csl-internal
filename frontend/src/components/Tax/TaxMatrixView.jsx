@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
+import { STATUS_HOTKEYS, STATUS_LABELS } from "../../constants/taskStatus";
 
 const TaxMatrixView = ({ taxes, activeTab, onStatusChange }) => {
   const [activeCell, setActiveCell] = useState({ row: 0, col: 0 });
@@ -44,13 +45,14 @@ const TaxMatrixView = ({ taxes, activeTab, onStatusChange }) => {
 
     const mData = {};
     taxes.forEach((tax) => {
-      if (!mData[tax.clientName]) {
-        mData[tax.clientName] = {
+      const clientName = tax.Client?.name || tax.clientName;
+      if (!mData[clientName]) {
+        mData[clientName] = {
           pic: tax.User?.name || "No PIC",
           data: {},
         };
       }
-      mData[tax.clientName].data[tax.period] = {
+      mData[clientName].data[tax.period] = {
         id: tax.id,
         status: tax.status,
       };
@@ -88,9 +90,7 @@ const TaxMatrixView = ({ taxes, activeTab, onStatusChange }) => {
         const cellData = matrixData[currentClient].data[currentPeriod];
         if (cellData) {
           const key = e.key.toLowerCase();
-          const hotkeys = {
-            o: "OK", l: "LAPOR", b: "DIBAYAR", k: "DIKIRIM", t: "TTD", r: "REVIEW", d: "DIBUAT",
-          };
+          const hotkeys = STATUS_HOTKEYS;
           if (hotkeys[key] && cellData.status !== hotkeys[key]) {
             onStatusChange({ id: cellData.id, newStatus: hotkeys[key] });
           }
@@ -103,9 +103,11 @@ const TaxMatrixView = ({ taxes, activeTab, onStatusChange }) => {
 
   const getStatusColor = (status) => {
     switch (status) {
-      case "OK": return "bg-emerald-500 text-white border-emerald-600";
-      case "DIBAYAR": return "bg-blue-600 text-white border-blue-700";
-      case "DIBUAT": return "bg-slate-50 text-slate-400 border-slate-200 shadow-none";
+      case "COMPLETED": return "bg-emerald-500 text-white border-emerald-600";
+      case "PAID":
+      case "FILED": return "bg-blue-600 text-white border-blue-700";
+      case "NOT_STARTED": return "bg-slate-50 text-slate-400 border-slate-200 shadow-none";
+      case "BLOCKED": return "bg-red-500 text-white border-red-600";
       default: return "bg-amber-400 text-amber-900 border-amber-500";
     }
   };
@@ -115,11 +117,11 @@ const TaxMatrixView = ({ taxes, activeTab, onStatusChange }) => {
       <div className="mb-3 text-[11px] font-semibold text-slate-600 bg-white px-3 py-2 rounded-lg border border-slate-200 shadow-sm inline-flex items-center gap-4 w-fit">
         <span className="flex items-center gap-1"><span className="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-300">Arrows</span> Navigasi</span>
         <span className="w-px h-4 bg-slate-300"></span>
-        <span className="flex items-center gap-1"><span className="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-300">O</span> OK</span>
-        <span className="flex items-center gap-1"><span className="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-300">B</span> DIBAYAR</span>
-        <span className="flex items-center gap-1"><span className="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-300">K</span> DIKIRIM</span>
+        <span className="flex items-center gap-1"><span className="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-300">O</span> Selesai</span>
+        <span className="flex items-center gap-1"><span className="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-300">B</span> Dibayar</span>
+        <span className="flex items-center gap-1"><span className="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-300">K</span> Tunggu Klien</span>
         <span className="flex items-center gap-1"><span className="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-300">T</span> TTD</span>
-        <span className="flex items-center gap-1"><span className="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-300">R</span> REVIEW</span>
+        <span className="flex items-center gap-1"><span className="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-300">R</span> Review</span>
       </div>
 
       <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-sm bg-white custom-scrollbar pb-6">
@@ -167,14 +169,14 @@ const TaxMatrixView = ({ taxes, activeTab, onStatusChange }) => {
                         <td
                           key={period}
                           onClick={() => setActiveCell({ row: rowIndex, col: colIndex })}
-                          onDoubleClick={() => cellData && cellData.status !== "OK" && onStatusChange({ id: cellData.id, newStatus: "OK" })}
+                          onDoubleClick={() => cellData && cellData.status !== "COMPLETED" && onStatusChange({ id: cellData.id, newStatus: "COMPLETED" })}
                           className={`p-1 border-r border-slate-100 cursor-cell relative transition-all duration-75
                             ${isActive ? "bg-blue-50 z-10 shadow-[inset_0_0_0_2px_#3b82f6]" : ""}
                           `}
                         >
                           {cellData ? (
                             <div className={`w-full py-1.5 font-bold rounded-md text-center border shadow-sm text-[10px] tracking-wide ${getStatusColor(cellData.status)}`}>
-                              {cellData.status}
+                              {STATUS_LABELS[cellData.status] || cellData.status}
                             </div>
                           ) : (
                             <div className="w-full py-1.5 text-center text-slate-300 font-bold">-</div>

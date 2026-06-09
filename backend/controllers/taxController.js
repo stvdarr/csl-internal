@@ -1,12 +1,18 @@
-import { TaxTrack, HistoryLog, User } from "../models/index.js";
+import {
+  assignTaxTask,
+  bulkCreateTaxTasks,
+  createTaxTask,
+  getClientTaxOverview,
+  getWorkloadSummary,
+  importTaxWorkbookRows,
+  listTaxes,
+  updateTaxTaskStatus,
+} from "../services/taxService.js";
+import { parseTaxWorkbookBuffer } from "../services/taxWorkbookParser.js";
 
-// 1. Fungsi untuk mengambil semua data pajak
 export const getAllTaxes = async (req, res) => {
   try {
-    // Mengambil data pajak dan menyertakan nama PIC-nya (dari tabel User)
-    const taxes = await TaxTrack.findAll({
-      include: [{ model: User, attributes: ["name", "email"] }],
-    });
+    const taxes = await listTaxes(req.query);
     res.status(200).json({ data: taxes });
   } catch (error) {
     console.error(error);
@@ -17,88 +23,120 @@ export const getAllTaxes = async (req, res) => {
 
 export const createTax = async (req, res) => {
   try {
-    const { clientName, taxType, period, amount } = req.body; // Tambah taxType
-    const pic_id = req.user.id;
-
-    const newTax = await TaxTrack.create({
-      clientName,
-      taxType,
-      period,
-      amount,
-      pic_id,
-    });
+    const newTax = await createTaxTask(req.body, req.user);
     res
       .status(201)
       .json({ message: "Data pajak berhasil dibuat", data: newTax });
   } catch (error) {
-    res.status(500).json({ error: "Gagal membuat data pajak" });
+    res.status(500).json({ error: `Gagal membuat data pajak: ${error.message}` });
   }
 };
 
 export const updateTaxStatus = async (req, res) => {
   try {
-    const { id } = req.params; // ID pajak dari URL (contoh: /api/tax/5)
-    const { newStatus } = req.body; // Status baru yang dikirim frontend
-    const userId = req.user.id; // ID pegawai yang sedang login
+    // 1. Simpan ke database
+    const taxData = await updateTaxTaskStatus(
+      req.params.id,
+      req.body.newStatus,
+      req.user,
+    );
 
-    // Cari data pajak yang lama
-    const taxData = await TaxTrack.findByPk(id);
-    if (!taxData) {
-      return res.status(404).json({ error: "Data pajak tidak ditemukan" });
+    // 2. Tiup peluit Socket.io
+    const io = req.app.get("io");
+    if (io) {
+      console.log(
+        `📣 [BACKEND] Memancarkan sinyal perubahan untuk Pajak ID: ${req.params.id}`,
+      );
+
+      io.emit("TAX_UPDATED", {
+        id: req.params.id,
+        newStatus: req.body.newStatus,
+      });
+    } else {
+      console.log(
+        "❌ [BACKEND] Gagal memancarkan sinyal: Objek 'io' tidak ditemukan!",
+      );
     }
-
-    const oldStatus = taxData.status;
-
-    // Cegah update jika status barunya sama dengan yang lama
-    if (oldStatus === newStatus) {
-      return res
-        .status(400)
-        .json({ error: "Status sudah sama, tidak ada perubahan" });
-    }
-
-    // Simpan status baru
-    taxData.status = newStatus;
-    await taxData.save();
-
-    // Catat ke buku sejarah (History Log)
-    await HistoryLog.create({
-      recordType: "TAX",
-      recordId: id,
-      oldStatus: oldStatus,
-      newStatus: newStatus,
-      updated_by: userId,
-    });
 
     res
       .status(200)
-      .json({ message: "Status pajak berhasil diperbarui dan log dicatat!" });
+      .json({ message: "Status pajak berhasil diperbarui!", data: taxData });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: "Gagal mengupdate status pajak" });
+    res
+      .status(error.statusCode || 500)
+      .json({ error: error.message || "Gagal mengupdate status pajak" });
   }
 };
 
 export const uploadBulkTaxes = async (req, res) => {
   try {
-    const { data, uploadedTaxType } = req.body; // Menerima taxType dari frontend saat upload
-    const pic_id = req.user.id;
-
-    const formattedData = data.map((row) => ({
-      clientName: row["NAMA WP"] || row.clientName || "Tanpa Nama",
-      taxType: uploadedTaxType || "UNIFIKASI", // Gunakan jenis pajak yang dipilih user
-      period: row["MASA"] || row.period || "Tidak Diketahui",
-      amount: 0,
-      status: "DIBUAT",
-      pic_id: pic_id,
-    }));
-
-    await TaxTrack.bulkCreate(formattedData);
+    const { data, uploadedTaxType } = req.body;
+    const created = await bulkCreateTaxTasks(data, uploadedTaxType, req.user);
     res
       .status(201)
       .json({
-        message: `${formattedData.length} data pajak berhasil diimpor!`,
+        message: `${created.length} data pajak berhasil diimpor!`,
+        data: created,
       });
   } catch (error) {
-    res.status(500).json({ error: "Gagal melakukan upload data massal" });
+    res.status(500).json({ error: `Gagal melakukan upload data massal: ${error.message}` });
+  }
+};
+
+export const previewTaxWorkbook = async (req, res) => {
+  try {
+    if (!req.file?.buffer) {
+      return res.status(400).json({ error: "File workbook wajib diupload" });
+    }
+
+    const preview = parseTaxWorkbookBuffer(req.file.buffer);
+    res.status(200).json({
+      message: `${preview.summary.totalRows} baris task terdeteksi dari workbook`,
+      data: preview,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(400).json({ error: `Gagal membaca workbook pajak: ${error.message}` });
+  }
+};
+
+export const confirmTaxWorkbookImport = async (req, res) => {
+  try {
+    const result = await importTaxWorkbookRows(req.body.rows, req.user);
+    res.status(201).json({
+      message: `Import selesai: ${result.created} dibuat, ${result.updated} diperbarui, ${result.unchanged} tanpa perubahan.`,
+      data: result,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(error.statusCode || 500).json({ error: `Gagal import workbook pajak: ${error.message}` });
+  }
+};
+
+export const assignTax = async (req, res) => {
+  try {
+    const taxData = await assignTaxTask(req.params.id, req.body.toUserId, req.user, req.body.reason);
+    res.status(200).json({ message: "Assignment pajak berhasil diperbarui", data: taxData });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: `Gagal mengubah assignment: ${error.message}` });
+  }
+};
+
+export const getTaxWorkload = async (req, res) => {
+  try {
+    const workload = await getWorkloadSummary();
+    res.status(200).json({ data: workload });
+  } catch (error) {
+    res.status(500).json({ error: `Gagal mengambil workload: ${error.message}` });
+  }
+};
+
+export const getTaxClients = async (req, res) => {
+  try {
+    const clients = await getClientTaxOverview();
+    res.status(200).json({ data: clients });
+  } catch (error) {
+    res.status(500).json({ error: `Gagal mengambil data klien: ${error.message}` });
   }
 };

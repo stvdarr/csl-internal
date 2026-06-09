@@ -2,14 +2,13 @@ import axios from "axios";
 
 // Bikin instance axios dengan base URL backend lu
 const api = axios.create({
-  baseURL: "http://localhost:5000/api", // Sesuaikan dengan port backend
+  baseURL: import.meta.env.VITE_API_URL || "http://localhost:5000/api",
 });
 
 // Interceptor: Satpam yang ngecek setiap request SEBELUM dikirim ke backend
 api.interceptors.request.use(
   (config) => {
-    // Ambil token dari localStorage
-    const token = localStorage.getItem("token");
+    const token = sessionStorage.getItem("token") || localStorage.getItem("token");
 
     // Kalau tokennya ada, tempelin di header Authorization
     if (token) {

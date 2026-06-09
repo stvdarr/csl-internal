@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import api from "../services/api";
 
 const ToDoList = () => {
@@ -12,22 +12,23 @@ const ToDoList = () => {
     deadline: "",
   });
 
-  const fetchTodos = async () => {
+  const fetchTodos = useCallback(async () => {
     try {
       setLoading(true);
       const response = await api.get("/todo");
       setTodos(response.data.data);
       setError("");
-    } catch (err) {
+    } catch {
       setError("Gagal memuat data tugas.");
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchTodos();
-  }, []);
+  }, [fetchTodos]);
 
   const handleStatusChange = async (todoId, newStatus) => {
     try {
@@ -49,7 +50,7 @@ const ToDoList = () => {
       alert("Tugas berhasil ditambahkan!");
       setNewTodo({ clientName: "", jobType: "", startDate: "", deadline: "" });
       fetchTodos();
-    } catch (err) {
+    } catch {
       alert("Gagal menambahkan tugas. Pastikan form terisi dengan benar.");
     }
   };

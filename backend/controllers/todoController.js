@@ -30,6 +30,11 @@ export const updateToDoStatus = async (req, res) => {
         const todoData = await ToDo.findByPk(id);
         if (!todoData) return res.status(404).json({ error: 'Tugas tidak ditemukan' });
 
+        // Tambahkan Ownership Check
+        if (todoData.pic_id !== userId && req.user.role !== 'Admin') {
+            return res.status(403).json({ error: 'Akses Ditolak. Anda bukan penanggung jawab untuk tugas ini.' });
+        }
+
         const oldStatus = todoData.status;
         if (oldStatus === newStatus) return res.status(400).json({ error: 'Status tidak ada perubahan' });
 

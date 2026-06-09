@@ -1,20 +1,27 @@
 import sequelize from '../config/database.js';
 import User from './User.js';
+import Client from './Client.js';
 import TaxTrack from './TaxTrack.js';
 import ToDo from './ToDo.js';
 import HistoryLog from './HistoryLog.js';
+import TaskAssignment from './TaskAssignment.js';
 
-// 1. Relasi User dengan TaxTrack (1 User bisa punya banyak TaxTrack)
 User.hasMany(TaxTrack, { foreignKey: 'pic_id' });
 TaxTrack.belongsTo(User, { foreignKey: 'pic_id' });
 
-// 2. Relasi User dengan ToDo (1 User bisa punya banyak ToDo)
 User.hasMany(ToDo, { foreignKey: 'pic_id' });
 ToDo.belongsTo(User, { foreignKey: 'pic_id' });
 
-// 3. Relasi User dengan HistoryLog (Mencatat User mana yang mengubah status)
-User.hasMany(HistoryLog, { foreignKey: 'updated_by' });
-HistoryLog.belongsTo(User, { foreignKey: 'updated_by' });
+Client.hasMany(TaxTrack, { foreignKey: 'clientId' });
+TaxTrack.belongsTo(Client, { foreignKey: 'clientId' });
 
-// Export semua agar mudah dipanggil di controller dan server
-export { sequelize, User, TaxTrack, ToDo, HistoryLog };
+User.hasMany(HistoryLog, { foreignKey: 'actorId' });
+HistoryLog.belongsTo(User, { foreignKey: 'actorId' });
+
+User.hasMany(TaskAssignment, { as: 'AssignmentsReceived', foreignKey: 'toUserId' });
+User.hasMany(TaskAssignment, { as: 'AssignmentsMade', foreignKey: 'assignedById' });
+TaskAssignment.belongsTo(User, { as: 'Assignee', foreignKey: 'toUserId' });
+TaskAssignment.belongsTo(User, { as: 'AssignedBy', foreignKey: 'assignedById' });
+TaskAssignment.belongsTo(User, { as: 'PreviousAssignee', foreignKey: 'fromUserId' });
+
+export { sequelize, User, Client, TaxTrack, ToDo, HistoryLog, TaskAssignment };

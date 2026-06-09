@@ -8,11 +8,14 @@ const TaxTrack = sequelize.define(
       type: DataTypes.STRING,
       allowNull: false,
     },
-    // TAMBAHAN BARU: Kategori Jenis Pajak
+    clientId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
     taxType: {
       type: DataTypes.STRING,
       allowNull: false,
-      defaultValue: "UMUM", // Contoh: PPN, 21, 25, 1771, dll
+      defaultValue: "UMUM",
     },
     period: {
       type: DataTypes.STRING,
@@ -23,17 +26,8 @@ const TaxTrack = sequelize.define(
       defaultValue: 0.0,
     },
     status: {
-      // PERLUASAN ENUM: Mengakomodasi alur Bulanan DAN Tahunan
-      type: DataTypes.ENUM(
-        "DIBUAT",
-        "REVIEW",
-        "TTD",
-        "DIKIRIM",
-        "DIBAYAR",
-        "LAPOR",
-        "OK",
-      ),
-      defaultValue: "DIBUAT",
+      type: DataTypes.STRING,
+      defaultValue: "NOT_STARTED",
     },
   },
   {
