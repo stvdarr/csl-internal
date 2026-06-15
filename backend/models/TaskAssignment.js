@@ -32,6 +32,12 @@ const TaskAssignment = sequelize.define(
   {
     tableName: "task_assignments",
     timestamps: true,
+    indexes: [
+      { fields: ["targetType", "targetId"] },
+      { fields: ["toUserId"] },
+      { fields: ["assignedById"] },
+      { fields: ["createdAt"] },
+    ],
   },
 );
 

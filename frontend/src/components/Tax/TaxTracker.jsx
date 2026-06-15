@@ -1,14 +1,32 @@
 import { useState, useEffect } from "react";
-import { io } from "socket.io-client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { List, Grid, Trash2 } from "lucide-react";
 import api from "../../services/api";
 import { socket } from "../../services/socket";
 
-import ExcelUploader from "./ExcelUploader";
 import MasterWorkbookUploader from "./MasterWorkbookUploader";
 import TaxMatrixView from "./TaxMatrixView";
 import TaxListView from "./TaxListView";
+import { CLEAR_ALL_TAX_CONFIRMATION } from "../../constants/destructiveActions";
+
+const TAX_FETCH_LIMIT = 100;
+
+const fetchTaxesForType = async (taxType) => {
+  const all = [];
+  let page = 1;
+  let totalPages = 1;
+
+  while (page <= totalPages) {
+    const { data } = await api.get("/tax", {
+      params: { taxType, page, limit: TAX_FETCH_LIMIT },
+    });
+    all.push(...data.data);
+    totalPages = data.totalPages;
+    page++;
+  }
+
+  return all;
+};
 
 const TAX_CATEGORIES = [
   "PPN",
@@ -24,36 +42,23 @@ const TAX_CATEGORIES = [
 
 const TaxTracker = () => {
   const [activeTab, setActiveTab] = useState("PPN");
-  const [viewMode, setViewMode] = useState("MATRIX"); // "LIST" | "MATRIX"
+  const [viewMode, setViewMode] = useState("MATRIX");
 
   const queryClient = useQueryClient();
 
   useEffect(() => {
     const handleConnect = () => {
-      console.log(
-        "🔌 Terhubung ke Real-Time Engine (Socket.id:",
-        socket.id,
-        ")",
-      );
-      // REFACTOR: Paksa sinkronisasi total SATU KALI saat koneksi baru pulih (Misal: laptop bangun dari Sleep mode)
-      queryClient.invalidateQueries(["taxes"]); 
+      queryClient.invalidateQueries({ queryKey: ["taxes"] });
     };
 
-    // 2. DENGARKAN SINYAL "TAX_UPDATED"
     const handleTaxUpdate = (payload) => {
-      console.log("🔔 Sinyal perubahan diterima dari user lain!", payload);
-
-      // REFACTOR: Zero Network Fetch! Gunakan Optimistic Cache Injection untuk mencegah 
-      // 50 browser menembak API (DDoS) secara bersamaan saat 1 orang update status.
-      queryClient.setQueryData(["taxes"], (oldTaxes) => {
+      queryClient.setQueriesData({ queryKey: ["taxes"] }, (oldTaxes) => {
         if (!oldTaxes) return oldTaxes;
-        
-        // Injeksi perubahan langsung ke dalam memori
+
         return oldTaxes.map((tax) =>
-          // Gunakan String(id) untuk memastikan tipe data cocok (String vs Number safe)
-          String(tax.id) === String(payload.id) 
-            ? { ...tax, status: payload.newStatus } 
-            : tax
+          String(tax.id) === String(payload.id)
+            ? { ...tax, status: payload.status }
+            : tax,
         );
       });
     };
@@ -61,62 +66,46 @@ const TaxTracker = () => {
     socket.on("connect", handleConnect);
     socket.on("TAX_UPDATED", handleTaxUpdate);
 
-    // Matikan pendengar hanya saat komponen benar-benar hancur
     return () => {
       socket.off("connect", handleConnect);
       socket.off("TAX_UPDATED", handleTaxUpdate);
     };
   }, [queryClient]);
 
-  // Fetch Taxes
   const { data: taxes = [], isLoading } = useQuery({
-    queryKey: ["taxes"],
-    queryFn: async () => {
-      const { data } = await api.get("/tax");
-      return data.data;
-    },
+    queryKey: ["taxes", activeTab],
+    queryFn: () => fetchTaxesForType(activeTab),
   });
 
-  // Mutations
   const updateStatusMutation = useMutation({
     mutationFn: async ({ id, newStatus }) => {
       await api.put(`/tax/${id}/status`, { newStatus });
     },
     onMutate: async ({ id, newStatus }) => {
-      await queryClient.cancelQueries(["taxes"]);
-      const previousTaxes = queryClient.getQueryData(["taxes"]);
-      queryClient.setQueryData(["taxes"], (old) =>
+      await queryClient.cancelQueries({ queryKey: ["taxes"] });
+      const previousTaxes = queryClient.getQueryData(["taxes", activeTab]);
+      queryClient.setQueryData(["taxes", activeTab], (old) =>
         old.map((tax) => (tax.id === id ? { ...tax, status: newStatus } : tax)),
       );
       return { previousTaxes };
     },
-    onError: (err, newTodo, context) => {
-      queryClient.setQueryData(["taxes"], context.previousTaxes);
+    onError: (err, _vars, context) => {
+      queryClient.setQueryData(["taxes", activeTab], context.previousTaxes);
       alert(err.message);
     },
     onSettled: () => {
-      queryClient.invalidateQueries(["taxes"]);
+      queryClient.invalidateQueries({ queryKey: ["taxes"] });
     },
   });
 
   const clearAllMutation = useMutation({
     mutationFn: async () => {
-      await api.delete("/tax/clear-all");
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries(["taxes"]);
-    },
-  });
-
-  const uploadBulkMutation = useMutation({
-    mutationFn: async (data) => {
-      await api.post("/tax/bulk", {
-        data,
-        uploadedTaxType: activeTab,
+      await api.delete("/tax/clear-all", {
+        data: { confirmation: CLEAR_ALL_TAX_CONFIRMATION },
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries(["taxes"]);
+      queryClient.invalidateQueries({ queryKey: ["taxes"] });
     },
   });
 
@@ -135,7 +124,7 @@ const TaxTracker = () => {
       return data;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries(["taxes"]);
+      queryClient.invalidateQueries({ queryKey: ["taxes"] });
     },
   });
 
@@ -149,8 +138,6 @@ const TaxTracker = () => {
     }
   };
 
-  const filteredTaxes = taxes.filter((t) => t.taxType === activeTab);
-
   if (isLoading) {
     return (
       <div className="flex flex-col items-center justify-center h-64 gap-4 text-slate-500">
@@ -162,7 +149,6 @@ const TaxTracker = () => {
 
   return (
     <div className="space-y-6">
-      {/* Category Tabs */}
       <div className="flex flex-wrap gap-2 p-2 bg-white border shadow-sm rounded-xl border-slate-200">
         {TAX_CATEGORIES.map((category) => (
           <button
@@ -180,7 +166,6 @@ const TaxTracker = () => {
         ))}
       </div>
 
-      {/* Uploader Section */}
       <div className="p-5 bg-white border shadow-sm border-slate-200 rounded-2xl">
         <MasterWorkbookUploader
           onPreview={(file) => previewWorkbookMutation.mutateAsync(file)}
@@ -188,14 +173,6 @@ const TaxTracker = () => {
         />
       </div>
 
-      <div className="p-5 bg-white border shadow-sm border-slate-200 rounded-2xl">
-        <ExcelUploader
-          activeTab={activeTab}
-          onUpload={(data) => uploadBulkMutation.mutateAsync(data)}
-        />
-      </div>
-
-      {/* Action Bar */}
       <div className="flex flex-col justify-between gap-4 p-3 bg-white border shadow-sm sm:flex-row sm:items-center rounded-xl border-slate-200">
         <div className="flex items-center gap-4 px-2">
           <h3 className="text-lg font-black tracking-tight uppercase text-slate-800">
@@ -233,17 +210,16 @@ const TaxTracker = () => {
         </div>
       </div>
 
-      {/* Data Views */}
       <div className="pb-10">
         {viewMode === "MATRIX" ? (
           <TaxMatrixView
-            taxes={filteredTaxes}
+            taxes={taxes}
             activeTab={activeTab}
             onStatusChange={updateStatusMutation.mutate}
           />
         ) : (
           <TaxListView
-            taxes={filteredTaxes}
+            taxes={taxes}
             activeTab={activeTab}
             onStatusChange={updateStatusMutation.mutate}
           />

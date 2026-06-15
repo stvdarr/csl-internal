@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { TASK_STATUSES } from "../constants/taskStatus.js";
+import { CLEAR_ALL_TAX_CONFIRMATION } from "../constants/destructiveActions.js";
 
 const idParam = z.object({
   id: z.coerce.number().int().positive(),
@@ -9,7 +10,25 @@ export const listTaxesSchema = z.object({
   query: z.object({
     assigneeId: z.coerce.number().int().positive().optional(),
     clientId: z.coerce.number().int().positive().optional(),
+    taxType: z.string().trim().max(80).optional(),
     status: z.enum(TASK_STATUSES).optional(),
+    page: z.coerce.number().int().positive().default(1),
+    limit: z.coerce.number().int().positive().max(100).default(20),
+  }),
+});
+
+export const listActivitySchema = z.object({
+  query: z.object({
+    page: z.coerce.number().int().positive().default(1),
+    limit: z.coerce.number().int().positive().max(100).default(20),
+  }),
+});
+
+export const listClientsSchema = z.object({
+  query: z.object({
+    page: z.coerce.number().int().positive().default(1),
+    limit: z.coerce.number().int().positive().max(100).default(20),
+    search: z.string().optional(),
   }),
 });
 
@@ -34,15 +53,18 @@ export const updateTaxStatusSchema = z.object({
 export const assignTaxSchema = z.object({
   params: idParam,
   body: z.object({
-    toUserId: z.number().int().positive(),
-    reason: z.string().trim().max(240).optional(),
+    toUserId: z.coerce.number().int().positive(),
+    reason: z.string().trim().max(255).optional(),
   }),
 });
 
-export const bulkTaxUploadSchema = z.object({
+export const bulkAssignTaxSchema = z.object({
+  params: z.object({
+    clientId: z.coerce.number().int().positive(),
+  }),
   body: z.object({
-    uploadedTaxType: z.string().trim().min(1).max(80).default("UNIFIKASI"),
-    data: z.array(z.record(z.any())).min(1).max(5000),
+    toUserId: z.coerce.number().int().positive(),
+    reason: z.string().trim().max(255).optional(),
   }),
 });
 
@@ -61,5 +83,11 @@ export const confirmWorkbookImportSchema = z.object({
         sourceColumn: z.number().int().positive(),
       }),
     ).min(1).max(10000),
+  }),
+});
+
+export const clearAllTaxesSchema = z.object({
+  body: z.object({
+    confirmation: z.literal(CLEAR_ALL_TAX_CONFIRMATION),
   }),
 });

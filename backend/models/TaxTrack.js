@@ -33,6 +33,14 @@ const TaxTrack = sequelize.define(
   {
     tableName: "tax_tracks",
     timestamps: true,
+    version: true,
+    indexes: [
+      { fields: ["pic_id"] },
+      { fields: ["clientId"] },
+      { fields: ["status"] },
+      { fields: ["period"] },
+      { fields: ["updatedAt"] },
+    ],
   },
 );
 

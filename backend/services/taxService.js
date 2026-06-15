@@ -8,36 +8,91 @@ import {
   TaskAssignment,
 } from "../models/index.js";
 import { normalizeTaskStatus, validateStateTransition } from "../constants/taskStatus.js";
+import { ROLES } from "../constants/roles.js";
 import { findOrCreateClientByName } from "./clientService.js";
-import { logActivity } from "./activityService.js";
+import { logActivity, logActivityBatch } from "./activityService.js";
 import { normalizeName } from "../utils/normalize.js";
+import { runInTransaction } from "../utils/transactionHelper.js";
+import logger from "../utils/logger.js";
+import { emitTaxUpdated } from "./socketEventBus.js";
 
 const taxInclude = [
   { model: User, attributes: ["id", "name", "email"] },
   { model: Client, attributes: ["id", "name", "taxIdNumber", "status"] },
 ];
 
-export const listTaxes = async ({ assigneeId, status, clientId } = {}) => {
+export const listTaxes = async ({
+  assigneeId,
+  status,
+  clientId,
+  taxType,
+  page = 1,
+  limit = 20,
+  currentUser,
+} = {}) => {
   const where = {};
-  if (assigneeId) where.pic_id = assigneeId;
+  
+  // Enforce access control at service layer
+  if (currentUser.role !== ROLES.ADMIN) {
+    where.pic_id = currentUser.id;
+  } else if (assigneeId) {
+    // Only admin can filter by assigneeId
+    where.pic_id = assigneeId;
+  }
+  
   if (status) where.status = normalizeTaskStatus(status);
   if (clientId) where.clientId = clientId;
+  if (taxType) where.taxType = taxType;
 
-  return TaxTrack.findAll({
+  const offset = (page - 1) * limit;
+
+  const { count, rows } = await TaxTrack.findAndCountAll({
     where,
     include: taxInclude,
     order: [["updatedAt", "DESC"]],
+    limit: parseInt(limit),
+    offset: parseInt(offset),
+  });
+
+  return {
+    total: count,
+    page: parseInt(page),
+    totalPages: Math.ceil(count / limit),
+    data: rows,
+  };
+};
+export const resetAllTaxData = async (actor) => {
+  return runInTransaction(async (transaction) => {
+    const [taxCount, assignmentCount] = await Promise.all([
+      TaxTrack.count({ transaction }),
+      TaskAssignment.count({ transaction }),
+    ]);
+
+    await logActivity({
+      actionType: "DELETED_ALL_TAX_DATA",
+      actorId: actor.id,
+      targetType: "TAX",
+      targetId: 0,
+      metadata: { taxCount, assignmentCount },
+      legacy: { recordType: "TAX", recordId: 0 },
+      transaction,
+    });
+
+    await TaskAssignment.destroy({ where: {}, transaction });
+    await TaxTrack.destroy({ where: {}, transaction });
+
+    return { taxCount, assignmentCount };
   });
 };
 
 export const createTaxTask = async (payload, actor) => {
-  return sequelize.transaction(async (transaction) => {
+  return runInTransaction(async (transaction) => {
     const client = await findOrCreateClientByName(
       payload.clientName,
       transaction,
     );
     const picId =
-      actor.role === "Admin" && payload.pic_id ? payload.pic_id : actor.id;
+      actor.role === ROLES.ADMIN && payload.pic_id ? payload.pic_id : actor.id;
     const assignee = await User.findByPk(picId, {
       attributes: ["id"],
       transaction,
@@ -103,9 +158,14 @@ export const createTaxTask = async (payload, actor) => {
 };
 
 export const updateTaxTaskStatus = async (id, newStatus, actor) => {
-  return sequelize.transaction(async (transaction) => {
+  return runInTransaction(async (transaction) => {
     const normalizedStatus = normalizeTaskStatus(newStatus);
-    const tax = await TaxTrack.findByPk(id, { transaction });
+    
+    // WS2: Implementation of Row-Level Locking (FOR UPDATE)
+    const tax = await TaxTrack.findByPk(id, { 
+      transaction,
+      lock: transaction.LOCK.UPDATE 
+    });
 
     if (!tax) {
       const error = new Error("Data pajak tidak ditemukan");
@@ -115,7 +175,7 @@ export const updateTaxTaskStatus = async (id, newStatus, actor) => {
 
     // Task 2: Cek Kepemilikan (Ownership Check)
     // Hanya penanggung jawab (PIC) atau Admin yang boleh mengubah status
-    if (tax.pic_id !== actor.id && actor.role !== "Admin") {
+    if (tax.pic_id !== actor.id && actor.role !== ROLES.ADMIN) {
       const error = new Error("Akses Ditolak. Anda bukan penanggung jawab (PIC) untuk data pajak ini.");
       error.statusCode = 403;
       throw error;
@@ -149,14 +209,21 @@ export const updateTaxTaskStatus = async (id, newStatus, actor) => {
       transaction,
     });
 
-    return TaxTrack.findByPk(tax.id, { include: taxInclude, transaction });
+    const updatedTax = await TaxTrack.findByPk(tax.id, { include: taxInclude, transaction });
+    // Emit WebSocket event via SocketEventBus
+    emitTaxUpdated(updatedTax);
+    return updatedTax;
   });
 };
 
 export const assignTaxTask = async (id, toUserId, actor, reason) => {
-  return sequelize.transaction(async (transaction) => {
+  return runInTransaction(async (transaction) => {
+    // WS2: Implementation of Row-Level Locking (FOR UPDATE)
     const [tax, assignee] = await Promise.all([
-      TaxTrack.findByPk(id, { transaction }),
+      TaxTrack.findByPk(id, { 
+        transaction,
+        lock: transaction.LOCK.UPDATE 
+      }),
       User.findByPk(toUserId, {
         attributes: ["id", "name", "email"],
         transaction,
@@ -199,86 +266,73 @@ export const assignTaxTask = async (id, toUserId, actor, reason) => {
       transaction,
     });
 
-    return TaxTrack.findByPk(tax.id, { include: taxInclude, transaction });
+    const updatedTax = await TaxTrack.findByPk(tax.id, { include: taxInclude, transaction });
+    emitTaxUpdated(updatedTax);
+    return updatedTax;
   });
 };
 
-export const bulkCreateTaxTasks = async (rows, uploadedTaxType, actor) => {
-  return await sequelize.transaction(async (transaction) => {
-    // 1. Resolve Unique Clients (Batch)
-    const clientNames = [...new Set(rows.map(row => row["NAMA WP"] || row.clientName || "Tanpa Nama"))];
-    const clientMap = {};
-    for (const name of clientNames) {
-      const client = await findOrCreateClientByName(name, transaction);
-      clientMap[normalizeName(name)] = client;
+export const assignTaxTasksByClient = async (clientId, toUserId, actor, reason) => {
+  return runInTransaction(async (transaction) => {
+    // 1. Validasi User Tujuan
+    const assignee = await User.findByPk(toUserId, {
+      attributes: ["id", "name", "email"],
+      transaction,
+    });
+
+    if (!assignee) {
+      const error = new Error("User tujuan assignment tidak ditemukan");
+      error.statusCode = 404;
+      throw error;
     }
 
-    const picId = actor.id;
-    const assignmentsToInsert = [];
-    const logsToInsert = [];
-    const createdTaxes = [];
+    // 2. Ambil semua TaxTrack untuk klien ini yang need updating
+    const taxesToUpdate = await TaxTrack.findAll({
+      where: { 
+        clientId,
+        pic_id: { [Op.ne]: assignee.id }
+      },
+      attributes: ["id", "pic_id"],
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
 
-    // 2. Sequential Creates (Only 1 query per row instead of 6)
-    for (const row of rows) {
-      const clientName = row["NAMA WP"] || row.clientName || "Tanpa Nama";
-      const client = clientMap[normalizeName(clientName)];
-      const period = row["MASA"] || row.period || "Tidak Diketahui";
-
-      const tax = await TaxTrack.create(
-        {
-          clientId: client.id,
-          clientName: client.name,
-          taxType: uploadedTaxType || "UNIFIKASI",
-          period,
-          amount: 0,
-          status: "NOT_STARTED",
-          pic_id: picId,
-        },
-        { transaction }
-      );
-      createdTaxes.push(tax);
-
-      assignmentsToInsert.push({
-        targetType: "TAX",
-        targetId: tax.id,
-        fromUserId: null,
-        toUserId: picId,
-        assignedById: actor.id,
-        reason: "Initial assignment"
-      });
-
-      logsToInsert.push({
-        recordType: "TAX",
-        recordId: tax.id,
-        actionType: "CREATED_TASK",
-        actorId: actor.id,
-        newStatus: tax.status,
-        metadata: JSON.stringify({
-          clientId: client.id,
-          clientName: client.name,
-          taxType: tax.taxType,
-          period: tax.period,
-        })
-      });
-
-      logsToInsert.push({
-        recordType: "TAX",
-        recordId: tax.id,
-        actionType: "ASSIGNED_TASK",
-        actorId: actor.id,
-        metadata: JSON.stringify({ fromUserId: null, toUserId: picId })
-      });
+    if (taxesToUpdate.length === 0) {
+      return { count: 0 };
     }
 
-    // 3. Bulk Insert Audit Logs & Assignments
-    if (assignmentsToInsert.length > 0) {
-      await TaskAssignment.bulkCreate(assignmentsToInsert, { transaction });
-    }
-    if (logsToInsert.length > 0) {
-      await HistoryLog.bulkCreate(logsToInsert, { transaction });
-    }
+    // 3. Bulk update all TaxTrack records in one query
+    await TaxTrack.update(
+      { pic_id: assignee.id },
+      {
+        where: { id: taxesToUpdate.map(t => t.id) },
+        transaction
+      }
+    );
 
-    return createdTaxes;
+    // 4. Prepare assignments and logs
+    const assignments = taxesToUpdate.map(tax => ({
+      targetType: "TAX",
+      targetId: tax.id,
+      fromUserId: tax.pic_id,
+      toUserId: assignee.id,
+      assignedById: actor.id,
+      reason,
+    }));
+
+    const logs = taxesToUpdate.map(tax => ({
+      actionType: "ASSIGNED_TASK",
+      actorId: actor.id,
+      targetType: "TAX",
+      targetId: tax.id,
+      metadata: { fromUserId: tax.pic_id, toUserId: assignee.id, reason },
+    }));
+
+    // 5. Bulk create assignments and logs
+    await TaskAssignment.bulkCreate(assignments, { transaction });
+    await logActivityBatch(logs, transaction);
+
+    return { count: taxesToUpdate.length };
   });
 };
 
@@ -289,321 +343,307 @@ const buildUserLookup = async (transaction) => {
   });
 
   return users.reduce((lookup, user) => {
+    // Standardize to consistent key format for comparison
     lookup[normalizeName(user.name)] = user;
     return lookup;
   }, {});
 };
 
+const buildClientLookup = async (transaction) => {
+  const clients = await Client.findAll({
+    attributes: ["id", "name", "normalizedName"],
+    transaction,
+  });
+
+  return clients.reduce((lookup, client) => {
+    lookup[client.normalizedName] = client;
+    return lookup;
+  }, {});
+};
+
 export const importTaxWorkbookRows = async (rows, actor) => {
-  return sequelize.transaction(async (transaction) => {
-    const userByName = await buildUserLookup(transaction);
+  const BATCH_SIZE = 100;
+  const results = {
+    total: rows.length,
+    created: 0,
+    updated: 0,
+    unchanged: 0,
+    failed: 0,
+    errors: [],
+  };
 
-    // --- PERBAIKAN FILTER DUPLIKAT: Normalisasi dulu baru saring lewat Set ---
-    const seenNormalizedNames = new Set();
-    const uniqueClientsToProcess = [];
+  let userByName = {};
+  let clientByName = {};
 
-    for (const row of rows) {
-      const originalName = row.clientName;
-      if (!originalName) continue;
-
-      const cleanName = String(originalName).trim().replace(/\s+/g, " ");
-      const normName = normalizeName(cleanName);
-
-      // Jika belum pernah diproses, masukkan ke daftar eksekusi
-      if (normName && !seenNormalizedNames.has(normName)) {
-        seenNormalizedNames.add(normName);
-        uniqueClientsToProcess.push({ cleanName, normName });
-      }
-    }
-
-    const clientMap = {};
-    for (const item of uniqueClientsToProcess) {
-      const [client] = await Client.findOrCreate({
-        where: { normalizedName: item.normName },
-        defaults: {
-          name: item.cleanName,
-          normalizedName: item.normName,
-        },
-        transaction,
-      });
-      clientMap[item.normName] = client;
-    }
-
-    const result = {
+  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+    const chunk = rows.slice(i, i + BATCH_SIZE);
+    const chunkStats = {
       created: 0,
       updated: 0,
       unchanged: 0,
-      assignedByFallback: 0,
-      rows: [],
+      failed: 0,
+      errors: [],
     };
+    const rowFailed = new Set();
 
-    // CHUNKED PROCESSING
-    const CHUNK_SIZE = 1000;
-    
-    for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
-      const chunk = rows.slice(i, i + CHUNK_SIZE);
+    try {
+      await runInTransaction(async (transaction) => {
+        Object.assign(userByName, await buildUserLookup(transaction));
+        Object.assign(clientByName, await buildClientLookup(transaction));
 
-      // BULK FETCH EXISTING
-      const orConditions = chunk.map(r => {
-        const norm = normalizeName(String(r.clientName || "").trim());
-        const client = clientMap[norm];
-        if (!client) return null;
-        return { clientId: client.id, taxType: r.taxType, period: r.period };
-      }).filter(Boolean);
+        const historyLogs = [];
 
-      let existingTaxes = [];
-      if (orConditions.length > 0) {
-        existingTaxes = await TaxTrack.findAll({
-          where: { [Op.or]: orConditions },
-          transaction
-        });
-      }
+        for (let j = 0; j < chunk.length; j++) {
+          const row = chunk[j];
+          try {
+            const cleanName = String(row.clientName || "")
+              .trim()
+              .replace(/\s+/g, " ");
+            const normalizedClientKey = normalizeName(cleanName);
 
-      const existingTaxMap = new Map();
-      existingTaxes.forEach(t => existingTaxMap.set(`${t.clientId}-${t.taxType}-${t.period}`, t));
+            let client = clientByName[normalizedClientKey];
+            if (!client) {
+              client = await findOrCreateClientByName(row.clientName, transaction);
+              clientByName[normalizedClientKey] = client;
+            }
 
-      const taxesToCreate = [];
-      const taxesToUpdate = [];
-      const assignmentsToInsert = [];
-      const logsToInsert = [];
-      
-      // Array pendukung untuk memetakan row payload mentah dengan record
-      const creationPayloadsMap = new Map();
+            const normalizedPicName = row.picName
+              ? normalizeName(row.picName)
+              : null;
+            const picId = normalizedPicName
+              ? userByName[normalizedPicName]?.id || null
+              : null;
 
-      for (const row of chunk) {
-        if (!row.clientName) continue;
-        const normName = normalizeName(String(row.clientName).trim().replace(/\s+/g, " "));
-        const client = clientMap[normName];
-        if (!client) continue;
+            const existing = await TaxTrack.findOne({
+              where: {
+                clientId: client.id,
+                taxType: row.taxType,
+                period: row.period,
+              },
+              include: [{ model: User, attributes: ["id", "name"] }],
+              transaction,
+            });
 
-        const normalizedStatus = normalizeTaskStatus(row.status || "NOT_STARTED");
-        const matchedPic = row.picName ? userByName[normalizeName(row.picName)] : null;
-        const picId = matchedPic?.id || actor.id;
+            if (!existing) {
+              const tax = await TaxTrack.create(
+                {
+                  clientId: client.id,
+                  clientName: client.name,
+                  taxType: row.taxType,
+                  period: row.period,
+                  status: row.status || "NOT_STARTED",
+                  pic_id: picId,
+                  amount: row.amount || 0,
+                },
+                { transaction },
+              );
 
-        if (!matchedPic && row.picName) result.assignedByFallback += 1;
+              historyLogs.push({
+                actionType: "CREATED_TASK",
+                actorId: actor.id,
+                targetType: "TAX",
+                targetId: tax.id,
+                metadata: row,
+                legacy: {
+                  recordType: "TAX",
+                  recordId: tax.id,
+                  newStatus: tax.status,
+                },
+              });
+              chunkStats.created++;
+            } else {
+              const hasStatusChange = existing.status !== row.status;
+              const hasPicChange = existing.pic_id !== picId;
+              const hasAmountChange =
+                Number(existing.amount) !== Number(row.amount || 0);
 
-        const key = `${client.id}-${row.taxType}-${row.period}`;
-        const existing = existingTaxMap.get(key);
+              if (hasStatusChange || hasPicChange || hasAmountChange) {
+                const oldStatus = existing.status;
+                const oldPicId = existing.pic_id;
 
-        if (!existing) {
-          const payload = {
-            clientId: client.id,
-            clientName: client.name,
-            taxType: row.taxType,
-            period: row.period,
-            amount: row.amount ?? 0,
-            status: normalizedStatus,
-            pic_id: picId,
-          };
-          taxesToCreate.push(payload);
-          creationPayloadsMap.set(key, { row, picId, matchedPic, normalizedStatus, client });
-          continue;
+                await existing.update(
+                  {
+                    status: row.status,
+                    pic_id: picId,
+                    amount: row.amount || 0,
+                  },
+                  { transaction },
+                );
+
+                if (hasPicChange) {
+                  await TaskAssignment.create(
+                    {
+                      targetType: "TAX",
+                      targetId: existing.id,
+                      fromUserId: oldPicId,
+                      toUserId: picId,
+                      assignedById: actor.id,
+                      reason: "Updated from workbook import",
+                    },
+                    { transaction },
+                  );
+                }
+
+                historyLogs.push({
+                  actionType: "UPDATED_FROM_IMPORT",
+                  actorId: actor.id,
+                  targetType: "TAX",
+                  targetId: existing.id,
+                  metadata: { ...row, oldStatus },
+                  legacy: {
+                    recordType: "TAX",
+                    recordId: existing.id,
+                    oldStatus,
+                    newStatus: row.status,
+                  },
+                });
+                chunkStats.updated++;
+              } else {
+                chunkStats.unchanged++;
+              }
+            }
+          } catch (error) {
+            rowFailed.add(j);
+            chunkStats.failed++;
+            chunkStats.errors.push({
+              row: i + j,
+              clientName: row.clientName,
+              error: error.message,
+            });
+            logger.error({ error, rowIndex: i + j, row }, "Failed to import row");
+          }
         }
 
-        const changes = {};
-        if (existing.status !== normalizedStatus) changes.status = normalizedStatus;
-        if (Number(existing.amount || 0) !== Number(row.amount || 0)) changes.amount = row.amount ?? 0;
-        if (existing.pic_id !== picId) changes.pic_id = picId;
-        if (existing.clientName !== client.name) changes.clientName = client.name;
-
-        if (Object.keys(changes).length === 0) {
-          result.unchanged += 1;
-          result.rows.push({ id: existing.id, action: "unchanged" });
-          continue;
+        if (historyLogs.length > 0) {
+          await logActivityBatch(historyLogs, transaction);
         }
+      });
 
-        // BATCH UPDATE PAYLOAD
-        const oldStatus = existing.status;
-        const oldPicId = existing.pic_id || null;
-        
-        taxesToUpdate.push({
-          id: existing.id, // Mandatory for updateOnDuplicate logic if available
-          clientId: existing.clientId,
-          taxType: existing.taxType,
-          period: existing.period,
-          status: changes.status !== undefined ? changes.status : existing.status,
-          amount: changes.amount !== undefined ? changes.amount : existing.amount,
-          pic_id: changes.pic_id !== undefined ? changes.pic_id : existing.pic_id,
-          clientName: changes.clientName !== undefined ? changes.clientName : existing.clientName,
-        });
-
-        if (oldPicId !== picId) {
-          assignmentsToInsert.push({
-            targetType: "TAX",
-            targetId: existing.id,
-            fromUserId: oldPicId,
-            toUserId: picId,
-            assignedById: actor.id,
-            reason: "Workbook import reassignment",
-          });
-        }
-
-        logsToInsert.push({
-          actionType: "UPDATED_FROM_WORKBOOK_IMPORT",
-          actorId: actor.id,
-          targetType: "TAX",
-          targetId: existing.id,
-          metadata: JSON.stringify({
-            changes,
-            sourceSheet: row.sourceSheet,
-            sourceRow: row.sourceRow,
-            sourceColumn: row.sourceColumn,
-            picName: row.picName || null,
-            matchedPicId: matchedPic?.id || null,
-          }),
-          legacy: JSON.stringify({
-            recordType: "TAX",
-            recordId: existing.id,
-            oldStatus,
-            newStatus: changes.status || existing.status,
-          })
-        });
-
-        result.updated += 1;
-        result.rows.push({ id: existing.id, action: "updated" });
-      }
-
-      // EXECUTE BATCH UPDATES
-      if (taxesToUpdate.length > 0) {
-        await TaxTrack.bulkCreate(taxesToUpdate, {
-          updateOnDuplicate: ["status", "amount", "pic_id", "clientName"],
-          transaction
+      results.created += chunkStats.created;
+      results.updated += chunkStats.updated;
+      results.unchanged += chunkStats.unchanged;
+      results.failed += chunkStats.failed;
+      results.errors.push(...chunkStats.errors);
+    } catch (err) {
+      for (let j = 0; j < chunk.length; j++) {
+        if (rowFailed.has(j)) continue;
+        const row = chunk[j];
+        chunkStats.failed++;
+        chunkStats.errors.push({
+          row: i + j,
+          clientName: row.clientName,
+          error: err.message,
         });
       }
-
-      // EXECUTE BULK INSERTS
-      if (taxesToCreate.length > 0) {
-        await TaxTrack.bulkCreate(taxesToCreate, { transaction });
-        
-        // Fetch newly created IDs
-        const newOrConditions = taxesToCreate.map(t => ({
-          clientId: t.clientId, taxType: t.taxType, period: t.period
-        }));
-        
-        const newTaxes = await TaxTrack.findAll({
-          where: { [Op.or]: newOrConditions },
-          transaction
-        });
-
-        newTaxes.forEach(tax => {
-          const key = `${tax.clientId}-${tax.taxType}-${tax.period}`;
-          const rawPayload = creationPayloadsMap.get(key);
-          if (!rawPayload) return;
-
-          const { row, picId, matchedPic, normalizedStatus, client } = rawPayload;
-
-          assignmentsToInsert.push({
-            targetType: "TAX",
-            targetId: tax.id,
-            fromUserId: null,
-            toUserId: picId,
-            assignedById: actor.id,
-            reason: "Workbook import",
-          });
-
-          logsToInsert.push({
-            actionType: "IMPORTED_TASK",
-            actorId: actor.id,
-            targetType: "TAX",
-            targetId: tax.id,
-            metadata: JSON.stringify({
-              clientId: client.id,
-              clientName: client.name,
-              taxType: row.taxType,
-              period: row.period,
-              sourceSheet: row.sourceSheet,
-              sourceRow: row.sourceRow,
-              sourceColumn: row.sourceColumn,
-              picName: row.picName || null,
-              matchedPicId: matchedPic?.id || null,
-            }),
-            legacy: JSON.stringify({
-              recordType: "TAX",
-              recordId: tax.id,
-              newStatus: normalizedStatus,
-            })
-          });
-
-          result.created += 1;
-          result.rows.push({ id: tax.id, action: "created" });
-        });
-      }
-
-      // EXECUTE BULK AUDIT LOGS & ASSIGNMENTS
-      if (assignmentsToInsert.length > 0) {
-        await TaskAssignment.bulkCreate(assignmentsToInsert, { transaction });
-      }
-      if (logsToInsert.length > 0) {
-        await HistoryLog.bulkCreate(logsToInsert, { transaction });
-      }
+      results.failed += chunkStats.failed;
+      results.errors.push(...chunkStats.errors);
+      logger.error({ err, batch: i / BATCH_SIZE }, "Batch transaction failed");
     }
+  }
 
-    return result;
-  });
+  // Map results for legacy frontend compatibility
+  return {
+    ...results,
+    success: results.created + results.updated + results.unchanged,
+  };
 };
 
 export const getWorkloadSummary = async () => {
+  // Use aggregation to avoid fetching all records
+  const counts = await TaxTrack.findAll({
+    attributes: [
+      "pic_id",
+      "status",
+      [sequelize.fn("COUNT", sequelize.col("id")), "count"],
+    ],
+    where: {
+      status: { [Op.ne]: "COMPLETED" },
+    },
+    group: ["pic_id", "status"],
+    raw: true,
+  });
+
   const users = await User.findAll({
     attributes: ["id", "name", "email", "role"],
-    include: [
-      {
-        model: TaxTrack,
-        attributes: ["id", "status"],
-        required: false,
-        where: {
-          status: {
-            [Op.ne]: "COMPLETED",
-          },
-        },
-      },
-    ],
+    where: { role: ROLES.STAFF },
   });
 
-  return users.map((user) => {
-    const tasks = user.TaxTracks || [];
-    return {
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-      },
-      openTaskCount: tasks.length,
-      blockedTaskCount: tasks.filter((task) => task.status === "BLOCKED")
-        .length,
-      waitingTaskCount: tasks.filter((task) =>
-        task.status.startsWith("WAITING"),
-      ).length,
-    };
-  });
+  return {
+    data: users.map((user) => {
+      const userCounts = counts.filter((c) => c.pic_id === user.id);
+      return {
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+        },
+        openTaskCount: userCounts.reduce(
+          (acc, curr) => acc + parseInt(curr.count),
+          0,
+        ),
+        blockedTaskCount: userCounts
+          .filter((c) => c.status === "BLOCKED")
+          .reduce((acc, curr) => acc + parseInt(curr.count), 0),
+        waitingTaskCount: userCounts
+          .filter((c) => c.status.startsWith("WAITING"))
+          .reduce((acc, curr) => acc + parseInt(curr.count), 0),
+      };
+    }),
+  };
 };
 
-export const getClientTaxOverview = async () => {
-  const clients = await Client.findAll({
+export const getClientTaxOverview = async ({
+  page = 1,
+  limit = 20,
+  search = "",
+  currentUser,
+} = {}) => {
+  const where = {};
+  if (search) {
+    where.name = { [Op.like]: `%${search}%` };
+  }
+
+  const offset = (page - 1) * limit;
+
+  const taxWhere = {};
+  // For non-admin users, filter tax tracks to only their assigned ones
+  if (currentUser.role !== ROLES.ADMIN) {
+    taxWhere.pic_id = currentUser.id;
+  }
+
+  const { count, rows } = await Client.findAndCountAll({
+    where,
     include: [
       {
         model: TaxTrack,
+        where: Object.keys(taxWhere).length > 0 ? taxWhere : undefined,
         include: [{ model: User, attributes: ["id", "name", "email"] }],
+        required: false,
       },
     ],
     order: [["name", "ASC"]],
+    limit: parseInt(limit),
+    offset: parseInt(offset),
+    distinct: true, // Required for correct count with joins
   });
 
-  return clients.map((client) => ({
-    id: client.id,
-    name: client.name,
-    taxIdNumber: client.taxIdNumber,
-    status: client.status,
-    openTaskCount: client.TaxTracks.filter(
-      (task) => task.status !== "COMPLETED",
-    ).length,
-    tasks: client.TaxTracks,
-  }));
+  return {
+    total: count,
+    page: parseInt(page),
+    totalPages: Math.ceil(count / limit),
+    data: rows.map((client) => ({
+      id: client.id,
+      name: client.name,
+      taxIdNumber: client.taxIdNumber,
+      status: client.status,
+      openTaskCount: client.TaxTracks.filter(
+        (task) => task.status !== "COMPLETED",
+      ).length,
+      totalTaskCount: client.TaxTracks.length,
+      tasks: client.TaxTracks, // Kembalikan array tasks agar frontend matrix bisa render per cell
+    })),
+  };
 };
 
-export const listActivity = async () => {
-  return HistoryLog.findAll({
-    include: [{ model: User, attributes: ["id", "name", "email"] }],
-    order: [["createdAt", "DESC"]],
-  });
-};
+

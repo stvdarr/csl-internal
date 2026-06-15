@@ -1,31 +1,54 @@
 import express from "express";
-import dotenv from "dotenv";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import http from "http"; // 1. IMPORT MODULE HTTP BAWAAN NODE.JS
-import { Server } from "socket.io"; // 2. IMPORT SOCKET.IO
+import cookieParser from "cookie-parser";
+import http from "http";
+import { Server } from "socket.io";
+import pinoHTTP from "pino-http";
+import * as Sentry from "@sentry/node";
+import client from "prom-client";
+import jwt from "jsonwebtoken";
 
+import { env } from "./config/env.js";
+import logger from "./utils/logger.js";
+import { extractTokenFromSocket } from "./utils/cookieAuth.js";
 import { sequelize } from "./models/index.js";
 import authRoutes from "./routes/authRoutes.js";
 import taxRoutes from "./routes/taxRoutes.js";
 import todoRoutes from "./routes/todoRoutes.js";
 import historyRoutes from "./routes/historyRoutes.js";
+import healthRoutes from "./routes/healthRoutes.js";
 import { backfillTaxClients } from "./services/bootstrapService.js";
+import { verifyToken } from "./middleware/authCheck.js";
+import { requireAdmin } from "./middleware/roleCheck.js";
+import { initializeSocketEventBus } from "./services/socketEventBus.js";
 
-dotenv.config();
+// Sentry Initialization
+if (env.SENTRY_DSN) {
+  Sentry.init({
+    dsn: env.SENTRY_DSN,
+    environment: env.NODE_ENV,
+  });
+}
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = env.PORT;
 
-// REFACTOR: Matikan alter schema untuk mencegah ER_TOO_MANY_KEYS pada production
-const shouldAlterSchema = false;
+// Prometheus Metrics Setup
+const register = new client.Registry();
+client.collectDefaultMetrics({ register });
+
+app.use(pinoHTTP({ logger }));
+
+// REFACTOR: Schema synchronization logic
+// In development, we use 'alter: true' to keep DB in sync with models.
+// In production, this should be 'false' to avoid accidental data loss or performance issues.
+const shouldAlterSchema = env.NODE_ENV !== "production";
 
 const server = http.createServer(app); // Bungkus app Express ke dalam HTTP Server
 
-const allowedOrigins = (
-  process.env.CORS_ORIGIN || "http://localhost:5173,http://192.168.0.120:5173"
-)
+const allowedOrigins = env.CORS_ORIGIN
   .split(",")
   .map((origin) => origin.trim());
 
@@ -36,24 +59,60 @@ const io = new Server(server, {
   },
 });
 
+// JWT Verification for Socket.IO
+io.use((socket, next) => {
+  const token = extractTokenFromSocket(socket);
+
+  if (!token) {
+    return next(new Error("Authentication error: No token provided"));
+  }
+
+  try {
+    const decoded = jwt.verify(token, env.JWT_SECRET);
+    socket.user = decoded;
+    next();
+  } catch {
+    return next(new Error("Authentication error: Invalid or expired token"));
+  }
+});
+
 app.set("io", io);
 
+// Initialize Socket Event Bus for decoupled event emission
+initializeSocketEventBus(io);
+
 io.on("connection", (socket) => {
-  console.log("🟢 Klien Frontend terhubung ke WebSocket:", socket.id);
+  logger.info({ socketId: socket.id, userId: socket.user.id, role: socket.user.role }, "🟢 Klien Frontend terhubung ke WebSocket");
+
+  // Join admin room if user is Admin
+  if (socket.user.role === "Admin") {
+    socket.join("admin_room");
+    logger.info({ socketId: socket.id, userId: socket.user.id }, "👑 Admin bergabung ke admin room");
+  }
+
+  // WS4: Join user to a private room based on their ID (verified token)
+  socket.on("join_private_room", (userId) => {
+    // Verify that the userId matches the token's user id
+    if (userId && String(userId) === String(socket.user.id)) {
+      const room = `user_${userId}`;
+      socket.join(room);
+      logger.info({ socketId: socket.id, room }, "👤 User bergabung ke room privat");
+    }
+  });
 
   socket.on("disconnect", () => {
-    console.log("🔴 Klien Frontend terputus:", socket.id);
+    logger.info({ socketId: socket.id, userId: socket.user.id }, "🔴 Klien Frontend terputus");
   });
 });
 
-// REFACTOR: Tambahkan Trust Proxy sebelum rateLimit agar IP user tidak terbaca sebagai IP Load Balancer (Mencegah Internal DDoS)
 app.set('trust proxy', 1);
 
 app.use(helmet());
+// Global rate limiter
 app.use(
   rateLimit({
-    windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000),
-    limit: Number(process.env.RATE_LIMIT_MAX || 300),
+    windowMs: env.RATE_LIMIT_WINDOW_MS,
+    limit: env.RATE_LIMIT_MAX,
     standardHeaders: true,
     legacyHeaders: false,
   }),
@@ -71,13 +130,20 @@ app.use(
   }),
 );
 
+app.use(cookieParser());
 app.use(express.json({ limit: "2mb" }));
 
 // --- ROUTES ---
+app.use("/api/health", healthRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/tax", taxRoutes);
 app.use("/api/todo", todoRoutes);
 app.use("/api/history", historyRoutes);
+
+app.get("/metrics", verifyToken, requireAdmin, async (req, res) => {
+  res.set("Content-Type", register.contentType);
+  res.end(await register.metrics());
+});
 
 app.get("/", (req, res) => {
   res.send("Server PT Catat Susun Lapor berjalan dengan mulus!");
@@ -85,7 +151,7 @@ app.get("/", (req, res) => {
 
 // --- GLOBAL ERROR HANDLER (Wajib di bawah semua route!) ---
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  logger.error(err, "Global Error Handler caught an error");
   res.status(500).json({ error: "Something went wrong!" });
 });
 
@@ -94,29 +160,31 @@ const startServer = async () => {
   try {
     // 1. Check database connection
     await sequelize.authenticate();
-    console.log("✅ Koneksi ke MySQL berhasil dibangun!");
+    logger.info("✅ Koneksi ke MySQL berhasil dibangun!");
 
     // 2. Sync semua model.
     // Karena tabel 'clients' udah lu hapus, ini bakal bikin tabel baru yang fresh
     // sesuai dengan yang ada di file models/client.js lu.
     await sequelize.sync({ alter: shouldAlterSchema, force: false });
-    console.log("✅ Semua model telah berhasil disinkronisasi ke database!");
+    logger.info("✅ Semua model telah berhasil disinkronisasi ke database!");
 
-    // 3. Jalankan backfill jika ada data lama yang perlu diurus
-    const backfilledClients = await backfillTaxClients();
-    if (backfilledClients > 0) {
-      console.log(
-        `✅ Backfill klien selesai untuk ${backfilledClients} data pajak lama.`,
-      );
-    }
+    // WS1: P0 Fix - Run backfill asynchronously to prevent startup timeout
+    backfillTaxClients()
+      .then((count) => {
+        if (count > 0) {
+          logger.info({ backfilledCount: count }, `✅ Backfill klien selesai untuk ${count} data pajak lama secara background`);
+        }
+      })
+      .catch((err) => logger.error({ err }, "❌ Backfill data klien gagal"));
 
     server.listen(PORT, () => {
-      console.log(
+      logger.info(
+        { port: PORT },
         `🚀 Server Backend & WebSocket nyala di http://localhost:${PORT}`,
       );
     });
   } catch (error) {
-    console.error("❌ Gagal terkoneksi atau sinkronisasi database:", error);
+    logger.error(error, "❌ Gagal terkoneksi atau sinkronisasi database");
     process.exit(1);
   }
 };

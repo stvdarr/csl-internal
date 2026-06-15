@@ -1,26 +1,19 @@
-import jwt from 'jsonwebtoken';
+import jwt from "jsonwebtoken";
+import { env } from "../config/env.js";
+import { extractTokenFromRequest } from "../utils/cookieAuth.js";
 
 export const verifyToken = (req, res, next) => {
-    // Ambil tiket dari header Authorization
-    const authHeader = req.headers['authorization'];
-    
-    // Format tiket yang benar adalah: "Bearer <token_jwt_disini>"
-    const token = authHeader && authHeader.split(' ')[1];
+  const token = extractTokenFromRequest(req);
 
-    if (!token) {
-        return res.status(401).json({ error: 'Akses ditolak! Token tidak ditemukan.' });
-    }
+  if (!token) {
+    return res.status(401).json({ error: "Akses ditolak! Token tidak ditemukan." });
+  }
 
-    try {
-        // Cek keaslian tiket menggunakan JWT_SECRET
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        
-        // Simpan data id dan role dari tiket ke dalam req.user
-        req.user = decoded; 
-        
-        // Lanjutkan perjalanan ke Controller
-        next(); 
-    } catch (error) {
-        res.status(403).json({ error: 'Token tidak valid atau sudah kedaluwarsa!' });
-    }
+  try {
+    const decoded = jwt.verify(token, env.JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch {
+    res.status(403).json({ error: "Token tidak valid atau sudah kedaluwarsa!" });
+  }
 };

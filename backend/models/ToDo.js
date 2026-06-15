@@ -25,7 +25,14 @@ const ToDo = sequelize.define('ToDo', {
     }
 }, {
     tableName: 'todos',
-    timestamps: true
-});
+    timestamps: true,
+    version: true,
+    indexes: [
+      { fields: ['pic_id'] },
+      { fields: ['status'] },
+      { fields: ['deadline'] },
+      { fields: ['updatedAt'] },
+    ],
+  });
 
 export default ToDo;

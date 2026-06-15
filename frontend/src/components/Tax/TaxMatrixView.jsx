@@ -1,12 +1,31 @@
-import { useEffect, useState, useMemo } from "react";
-import { STATUS_HOTKEYS, STATUS_LABELS } from "../../constants/taskStatus";
+import { useEffect, useState, useMemo, useContext } from "react";
+import { STATUS_HOTKEYS, STATUS_LABELS, VALID_TRANSITIONS } from "../../constants/taskStatus";
+import { AuthContext } from "../../context/AuthContext";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import api from "../../services/api";
+import { User as UserIcon, Loader2, Check, X } from "lucide-react";
 
 const TaxMatrixView = ({ taxes, activeTab, onStatusChange }) => {
+  const { user: currentUser } = useContext(AuthContext);
+  const isAdmin = currentUser?.role === "Admin";
+  const queryClient = useQueryClient();
+
   const [activeCell, setActiveCell] = useState({ row: 0, col: 0 });
+  const [editingPic, setEditingPic] = useState(null); // { clientId }
+
+  // Fetch staff list for dropdown (only if admin)
+  const { data: staff = [] } = useQuery({
+    queryKey: ["staff"],
+    queryFn: async () => {
+      const { data } = await api.get("/auth/staff");
+      return data.data;
+    },
+    enabled: isAdmin,
+  });
 
   const parsePeriod = (p) => {
     const yearMatch = p.match(/\d{4}/);
-    const year = yearMatch ? parseInt(yearMatch[0]) : 0;
+    const year = yearMatch ? Number.parseInt(yearMatch[0]) : 0;
 
     let month = 0;
     let quarter = 0;
@@ -48,13 +67,17 @@ const TaxMatrixView = ({ taxes, activeTab, onStatusChange }) => {
       const clientName = tax.Client?.name || tax.clientName;
       if (!mData[clientName]) {
         mData[clientName] = {
+          clientId: tax.clientId,
           pic: tax.User?.name || "No PIC",
+          picId: tax.pic_id,
           data: {},
         };
       }
       mData[clientName].data[tax.period] = {
         id: tax.id,
         status: tax.status,
+        pic_id: tax.pic_id,
+        pic_name: tax.User?.name || "No PIC",
       };
     });
     
@@ -157,9 +180,48 @@ const TaxMatrixView = ({ taxes, activeTab, onStatusChange }) => {
                       {clientName}
                     </td>
                     <td className="px-2 py-2 text-center border-r border-slate-100">
-                      <span className="uppercase font-bold text-slate-500 text-[10px] bg-slate-100 px-2 py-1 rounded">
-                        {clientInfo.pic.split(" ")[0]}
-                      </span>
+                      {isAdmin ? (
+                        <div className="relative flex justify-center">
+                          {editingPic?.clientId === clientInfo.clientId ? (
+                            <div className="absolute z-50 top-0 bg-white border border-slate-200 shadow-xl rounded-lg p-2 min-w-[150px]">
+                              <select
+                                className="w-full text-[10px] p-1 border rounded mb-2"
+                                defaultValue={clientInfo.picId || ""}
+                                onChange={async (e) => {
+                                  const toUserId = e.target.value;
+                                  if (toUserId) {
+                                    await api.put(`/tax/client/${clientInfo.clientId}/assign`, { toUserId, reason: "Bulk change from matrix row" });
+                                    queryClient.invalidateQueries(["taxes"]);
+                                    setEditingPic(null);
+                                  }
+                                }}
+                              >
+                                <option value="">Pilih PIC...</option>
+                                {staff.map((s) => (
+                                  <option key={s.id} value={s.id}>{s.name}</option>
+                                ))}
+                              </select>
+                              <button 
+                                onClick={() => setEditingPic(null)}
+                                className="w-full text-[9px] text-red-500 font-bold hover:underline"
+                              >
+                                Batal
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => setEditingPic({ clientId: clientInfo.clientId })}
+                              className="uppercase font-bold text-blue-600 text-[10px] bg-blue-50 px-2 py-1 rounded hover:bg-blue-100 transition-colors border border-blue-100"
+                            >
+                              {clientInfo.pic.split(" ")[0]}
+                            </button>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="uppercase font-bold text-slate-500 text-[10px] bg-slate-100 px-2 py-1 rounded">
+                          {clientInfo.pic.split(" ")[0]}
+                        </span>
+                      )}
                     </td>
                     {uniquePeriods.map((period, colIndex) => {
                       const cellData = clientInfo.data[period];
@@ -169,14 +231,23 @@ const TaxMatrixView = ({ taxes, activeTab, onStatusChange }) => {
                         <td
                           key={period}
                           onClick={() => setActiveCell({ row: rowIndex, col: colIndex })}
-                          onDoubleClick={() => cellData && cellData.status !== "COMPLETED" && onStatusChange({ id: cellData.id, newStatus: "COMPLETED" })}
-                          className={`p-1 border-r border-slate-100 cursor-cell relative transition-all duration-75
+                          onDoubleClick={() => {
+                            if (cellData && cellData.status !== "COMPLETED") {
+                              const allowed = VALID_TRANSITIONS[cellData.status] || [];
+                              if (allowed.includes("COMPLETED")) {
+                                onStatusChange({ id: cellData.id, newStatus: "COMPLETED" });
+                              }
+                            }
+                          }}
+                          className={`p-1 border-r border-slate-100 cursor-cell relative transition-all duration-75 group/cell
                             ${isActive ? "bg-blue-50 z-10 shadow-[inset_0_0_0_2px_#3b82f6]" : ""}
                           `}
                         >
                           {cellData ? (
-                            <div className={`w-full py-1.5 font-bold rounded-md text-center border shadow-sm text-[10px] tracking-wide ${getStatusColor(cellData.status)}`}>
-                              {STATUS_LABELS[cellData.status] || cellData.status}
+                            <div className="relative">
+                              <div className={`w-full py-1.5 font-bold rounded-md text-center border shadow-sm text-[10px] tracking-wide ${getStatusColor(cellData.status)}`}>
+                                {STATUS_LABELS[cellData.status] || cellData.status}
+                              </div>
                             </div>
                           ) : (
                             <div className="w-full py-1.5 text-center text-slate-300 font-bold">-</div>

@@ -1,25 +1,28 @@
 import { io } from "socket.io-client";
-import api from "./api"; // Mengambil konfigurasi axios milikmu
+import api from "./api";
+import { getToken } from "../utils/storage";
 
-// Secara otomatis mendeteksi URL Backend (memotong /api di belakangnya)
-const rawUrl = api.defaults.baseURL || "http://localhost:5000";
-const socketUrl = rawUrl.replace(/\/api\/?$/, "");
+const resolveSocketUrl = () => {
+  const baseURL = api.defaults.baseURL || "/api";
 
-console.log("📡 MENGHUBUNGKAN SOCKET KE:", socketUrl);
+  if (baseURL.startsWith("/")) {
+    return window.location.origin;
+  }
 
-// Buat koneksi global (hanya 1 koneksi untuk seluruh aplikasi)
-export const socket = io(socketUrl, {
+  return baseURL.replace(/\/api\/?$/, "");
+};
+
+export const socket = io(resolveSocketUrl(), {
   withCredentials: true,
   transports: ["websocket", "polling"],
+  autoConnect: false,
+  auth: (cb) => {
+    cb({ token: getToken() });
+  },
 });
 
-// Pasang pendeteksi log di sini agar langsung terlihat di F12
 socket.on("connect", () => {
-  console.log(
-    "✅ FRONTEND TERHUBUNG KE REAL-TIME ENGINE! (ID:",
-    socket.id,
-    ")",
-  );
+  console.log("✅ FRONTEND TERHUBUNG KE REAL-TIME ENGINE! (ID:", socket.id, ")");
 });
 
 socket.on("connect_error", (err) => {

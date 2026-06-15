@@ -43,7 +43,14 @@ const HistoryLog = sequelize.define("HistoryLog", {
     }
 }, {
     tableName: "history_logs",
-    timestamps: true
-});
+    timestamps: true,
+    indexes: [
+      { fields: ["targetType", "targetId"] },
+      { fields: ["recordType", "recordId"] },
+      { fields: ["actorId"] },
+      { fields: ["createdAt"] },
+    ],
+  },
+);
 
 export default HistoryLog;

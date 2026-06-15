@@ -173,7 +173,17 @@ export const parseTaxWorkbookBuffer = (buffer) => {
     type: "buffer",
     cellDates: true,
   });
+  return parseWorkbook(workbook);
+};
 
+export const parseTaxWorkbookFile = (filePath) => {
+  const workbook = xlsx.readFile(filePath, {
+    cellDates: true,
+  });
+  return parseWorkbook(workbook);
+};
+
+const parseWorkbook = (workbook) => {
   const parsedRows = [];
   const skippedSheets = [];
 

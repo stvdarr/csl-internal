@@ -1,22 +1,34 @@
 import axios from "axios";
+import { getToken, clearAuthData } from "../utils/storage";
 
-// Bikin instance axios dengan base URL backend lu
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || "http://localhost:5000/api",
+  baseURL: import.meta.env.VITE_API_URL || "/api",
+  withCredentials: true,
 });
 
-// Interceptor: Satpam yang ngecek setiap request SEBELUM dikirim ke backend
 api.interceptors.request.use(
   (config) => {
-    const token = sessionStorage.getItem("token") || localStorage.getItem("token");
-
-    // Kalau tokennya ada, tempelin di header Authorization
+    const token = getToken();
     if (token) {
-      config.headers["Authorization"] = `Bearer ${token}`;
+      config.headers.Authorization = `Bearer ${token}`;
     }
     return config;
   },
+  (error) => Promise.reject(error),
+);
+
+api.interceptors.response.use(
+  (response) => response,
   (error) => {
+    if (error.response?.status === 401) {
+      const isSessionCheck = error.config?.url?.includes("/auth/me");
+
+      clearAuthData();
+
+      if (!isSessionCheck && window.location.pathname !== "/login") {
+        window.location.href = "/login";
+      }
+    }
     return Promise.reject(error);
   },
 );

@@ -6,11 +6,11 @@ const Client = sequelize.define(
   {
     name: {
       type: DataTypes.STRING,
-      allowNull: true,
+      allowNull: false,
     },
     normalizedName: {
       type: DataTypes.STRING,
-      allowNull: true,
+      allowNull: false,
       unique: true,
     },
     taxIdNumber: {
@@ -25,13 +25,11 @@ const Client = sequelize.define(
   {
     tableName: "clients",
     timestamps: true,
-    hooks: {
-      beforeValidate: (client) => {
-        if (client.name) {
-          client.normalizedName = client.name.toLowerCase().replace(/\s+/g, "");
-        }
-      },
-    },
+    version: true,
+    indexes: [
+      { fields: ["name"] },
+      { fields: ["status"] },
+    ],
   }
 );
 

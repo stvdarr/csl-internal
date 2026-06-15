@@ -1,9 +1,11 @@
+import { ROLES } from "../constants/roles.js";
+
 export const checkApprovalAccess = (req, res, next) => {
     const { newStatus } = req.body;
     const userRole = req.user.role;
 
     if (newStatus === 'COMPLETED' || newStatus === 'APPROVED') {
-        if (userRole !== 'Admin') {
+        if (userRole !== ROLES.ADMIN) {
             return res.status(403).json({ 
                 error: 'Akses Ditolak. Hanya Admin yang bisa memberikan final approval.' 
             });
@@ -14,7 +16,7 @@ export const checkApprovalAccess = (req, res, next) => {
 };
 
 export const requireAdmin = (req, res, next) => {
-    if (req.user.role !== 'Admin') {
+    if (req.user.role !== ROLES.ADMIN) {
         return res.status(403).json({
             error: 'Akses Ditolak. Hanya Admin yang bisa melakukan aksi ini.'
         });

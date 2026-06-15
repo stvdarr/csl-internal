@@ -1,76 +1,72 @@
-import bcrypt from 'bcrypt';
-import jwt from 'jsonwebtoken';
-import { User } from '../models/index.js';
+import { registerUser, loginUser, listAllStaff } from "../services/authService.js";
+import { User } from "../models/index.js";
+import logger from "../utils/logger.js";
+import { setAuthCookie, clearAuthCookie } from "../utils/cookieAuth.js";
 
-// Fungsi Register (Bikin Akun Baru)
-export const register = async (req, res) => {
-    try {
-        const { name, email, password } = req.body; // Abaikan 'role' dari payload untuk mencegah Privilege Escalation
-
-        // 1. Enkripsi password menggunakan bcrypt
-        const saltRounds = 10;
-        const hashedPassword = await bcrypt.hash(password, saltRounds);
-
-        // 2. Simpan user ke database (Default role dipaksa menjadi Staff)
-        const newUser = await User.create({
-            name,
-            email,
-            password: hashedPassword,
-            role: 'Staff'
-        });
-
-        const safeUser = {
-            id: newUser.id,
-            name: newUser.name,
-            email: newUser.email,
-            role: newUser.role
-        };
-
-        res.status(201).json({ message: 'User berhasil didaftarkan!', data: safeUser });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Gagal mendaftarkan user' });
-    }
+export const getStaffList = async (req, res) => {
+  try {
+    const staff = await listAllStaff();
+    res.status(200).json({ data: staff });
+  } catch (error) {
+    logger.error(error, "Error in getStaffList");
+    res.status(500).json({ error: "Gagal mengambil daftar staff" });
+  }
 };
 
-// Fungsi Login
-export const login = async (req, res) => {
-    try {
-        const { email, password } = req.body;
+export const getMe = async (req, res) => {
+  try {
+    const profile = await User.findByPk(req.user.id, {
+      attributes: ["id", "name", "email", "role"],
+    });
 
-        // 1. Cari user berdasarkan email
-        const user = await User.findOne({ where: { email } });
-        if (!user) {
-            return res.status(404).json({ error: 'User tidak ditemukan!' });
-        }
-
-        // 2. Cocokkan password yang diinput dengan password di database
-        const isPasswordValid = await bcrypt.compare(password, user.password);
-        if (!isPasswordValid) {
-            return res.status(401).json({ error: 'Password salah!' });
-        }
-
-        // 3. Jika cocok, cetak tiket JWT
-        // Tiket ini menyimpan id dan role user, berlaku selama 1 hari (24 jam)
-        const token = jwt.sign(
-            { id: user.id, role: user.role, email: user.email },
-            process.env.JWT_SECRET,
-            { expiresIn: '1d' }
-        );
-
-        res.status(200).json({ 
-            message: 'Login berhasil!', 
-            token, 
-            role: user.role,
-            user: {
-                id: user.id,
-                name: user.name,
-                email: user.email,
-                role: user.role
-            }
-        });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Terjadi kesalahan saat login' });
+    if (!profile) {
+      return res.status(401).json({ error: "Sesi tidak valid" });
     }
+
+    res.status(200).json({
+      role: profile.role,
+      user: profile.get({ plain: true }),
+    });
+  } catch (error) {
+    logger.error(error, "Error in getMe");
+    res.status(500).json({ error: "Gagal memverifikasi sesi" });
+  }
+};
+
+export const register = async (req, res) => {
+  try {
+    const safeUser = await registerUser(req.body);
+    res
+      .status(201)
+      .json({ message: "User berhasil didaftarkan!", data: safeUser });
+  } catch (error) {
+    logger.error(error, "Error in register");
+    res
+      .status(error.statusCode || 500)
+      .json({ error: error.message || "Gagal mendaftarkan user" });
+  }
+};
+
+export const login = async (req, res) => {
+  try {
+    const loginData = await loginUser(req.body);
+    setAuthCookie(res, loginData.token);
+
+    res.status(200).json({
+      message: "Login berhasil!",
+      token: loginData.token,
+      role: loginData.role,
+      user: loginData.user,
+    });
+  } catch (error) {
+    logger.error(error, "Error in login");
+    res
+      .status(error.statusCode || 500)
+      .json({ error: error.message || "Terjadi kesalahan saat login" });
+  }
+};
+
+export const logout = async (req, res) => {
+  clearAuthCookie(res);
+  res.status(200).json({ message: "Logout berhasil" });
 };

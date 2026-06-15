@@ -1,56 +1,78 @@
-import { ToDo, HistoryLog, User } from '../models/index.js';
+import {
+  createTodoTask,
+  listTodos,
+  updateTodoTaskStatus,
+  assignTodoTask,
+  listAllStaff,
+} from "../services/todoService.js";
+import logger from "../utils/logger.js";
 
 export const getAllToDos = async (req, res) => {
-    try {
-        const todos = await ToDo.findAll({ include: [{ model: User, attributes: ['name'] }] });
-        res.status(200).json({ data: todos });
-    } catch (error) {
-        res.status(500).json({ error: 'Gagal mengambil data tugas' });
-    }
+  try {
+    const result = await listTodos({ ...req.query, currentUser: req.user });
+    res.status(200).json(result);
+  } catch (error) {
+    logger.error(error, "Error in getAllToDos");
+    res.status(500).json({ error: "Gagal mengambil data tugas" });
+  }
 };
 
 export const createToDo = async (req, res) => {
-    try {
-        const { clientName, jobType, description, startDate, deadline } = req.body;
-        const pic_id = req.user.id;
-
-        const newTodo = await ToDo.create({ clientName, jobType, description, startDate, deadline, pic_id });
-        res.status(201).json({ message: 'Tugas berhasil dibuat', data: newTodo });
-    } catch (error) {
-        res.status(500).json({ error: 'Gagal membuat tugas' });
-    }
+  try {
+    const newTodo = await createTodoTask(req.body, req.user);
+    res.status(201).json({ message: "Tugas berhasil dibuat", data: newTodo });
+  } catch (error) {
+    logger.error(error, "Error in createToDo");
+    res
+      .status(error.statusCode || 500)
+      .json({ error: error.message || "Gagal membuat tugas" });
+  }
 };
 
 export const updateToDoStatus = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { newStatus } = req.body;
-        const userId = req.user.id;
+  try {
+    const { id } = req.params;
+    const { newStatus } = req.body;
 
-        const todoData = await ToDo.findByPk(id);
-        if (!todoData) return res.status(404).json({ error: 'Tugas tidak ditemukan' });
+    const todoData = await updateTodoTaskStatus(id, newStatus, req.user);
 
-        // Tambahkan Ownership Check
-        if (todoData.pic_id !== userId && req.user.role !== 'Admin') {
-            return res.status(403).json({ error: 'Akses Ditolak. Anda bukan penanggung jawab untuk tugas ini.' });
-        }
+    res.status(200).json({
+      message: "Status tugas diperbarui dan log dicatat!",
+      data: todoData,
+    });
+  } catch (error) {
+    logger.error(error, "Error in updateToDoStatus");
+    res
+      .status(error.statusCode || 500)
+      .json({ error: error.message || "Gagal mengupdate status tugas" });
+  }
+};
 
-        const oldStatus = todoData.status;
-        if (oldStatus === newStatus) return res.status(400).json({ error: 'Status tidak ada perubahan' });
+export const assignTodo = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { toUserId, reason } = req.body;
 
-        todoData.status = newStatus;
-        await todoData.save();
+    const result = await assignTodoTask(id, toUserId, req.user, reason);
 
-        await HistoryLog.create({
-            recordType: 'TODO',
-            recordId: id,
-            oldStatus: oldStatus,
-            newStatus: newStatus,
-            updated_by: userId
-        });
+    res.status(200).json({
+      message: "PIC tugas berhasil diperbarui",
+      data: result,
+    });
+  } catch (error) {
+    logger.error(error, "Error in assignTodo");
+    res
+      .status(error.statusCode || 500)
+      .json({ error: error.message || "Gagal memperbarui PIC tugas" });
+  }
+};
 
-        res.status(200).json({ message: 'Status tugas diperbarui dan log dicatat!' });
-    } catch (error) {
-        res.status(500).json({ error: 'Gagal mengupdate status tugas' });
-    }
+export const getAllStaff = async (req, res) => {
+  try {
+    const users = await listAllStaff();
+    res.status(200).json({ data: users });
+  } catch (error) {
+    logger.error(error, "Error in getAllStaff");
+    res.status(500).json({ error: "Gagal mengambil daftar pengguna" });
+  }
 };

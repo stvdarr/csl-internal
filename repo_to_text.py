@@ -15,7 +15,8 @@ with open(output_file, "w", encoding="utf-8") as outfile:
         for file in files:
             ext = os.path.splitext(file)[1]
             # Pastikan file ekstensi cocok, dan skrip tidak membaca dirinya sendiri / file output
-            if ext in EXTENSIONS_TO_INCLUDE and file != os.path.basename(__file__) and file != output_file:
+            # Skip files we don't want to include (this script itself, the output file, and package lock)
+            if ext in EXTENSIONS_TO_INCLUDE and file != os.path.basename(__file__) and file != output_file and file != 'package-lock.json':
                 file_path = os.path.join(root, file)
                 
                 # Tulis penanda nama file agar AI tahu ini kode dari file mana

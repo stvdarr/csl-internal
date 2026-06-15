@@ -1,5 +1,5 @@
 import { useState, useContext } from "react";
-import { AuthContext } from "../context/AuthContextValue";
+import { AuthContext } from "../context/AuthContext";
 import { motion, AnimatePresence } from "framer-motion";
 import { Mail, Lock, Eye, EyeOff, AlertCircle, Loader2 } from "lucide-react";
 
@@ -179,6 +179,8 @@ const Login = () => {
             </motion.button>
           </motion.div>
         </motion.form>
+
+
 
         <motion.div
           variants={itemVariants}
