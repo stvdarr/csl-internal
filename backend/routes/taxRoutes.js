@@ -1,29 +1,32 @@
+
 import express from "express";
 import rateLimit from "express-rate-limit";
 import {
-  assignTax,
-  bulkAssignClientTaxes,
   clearAllTaxes,
-  confirmTaxWorkbookImport,
   getAllTaxes,
-  getTaxClients,
-  getTaxWorkload,
   createTax,
-  previewTaxWorkbook,
   updateTaxStatus,
+  previewTaxWorkbook,
+  confirmTaxWorkbookImport,
+  getTaxWorkload,
+  getTaxClients,
+  createObligation,
+  getObligations,
+  assignObligation,
 } from "../controllers/taxController.js";
 import { verifyToken } from "../middleware/authCheck.js";
 import { checkApprovalAccess, requireAdmin } from "../middleware/roleCheck.js";
 import { validateRequest } from "../middleware/validateRequest.js";
 import {
-  assignTaxSchema,
-  bulkAssignTaxSchema,
-  clearAllTaxesSchema,
-  confirmWorkbookImportSchema,
-  createTaxSchema,
+  updateTaxStatusSchema,
   listTaxesSchema,
   listClientsSchema,
-  updateTaxStatusSchema,
+  createTaxSchema,
+  clearAllTaxesSchema,
+  confirmWorkbookImportSchema,
+  createObligationSchema,
+  listObligationsSchema,
+  assignObligationSchema,
 } from "../validators/taxSchemas.js";
 import {
   uploadWorkbook,
@@ -42,7 +45,36 @@ const clearAllLimiter = rateLimit({
 
 router.use(verifyToken);
 
+// --- OBLIGATION ROUTES ---
+router.post(
+  "/obligations",
+  requireAdmin,
+  validateRequest(createObligationSchema),
+  createObligation
+);
+router.get(
+  "/obligations",
+  validateRequest(listObligationsSchema),
+  getObligations
+);
+router.put(
+  "/obligations/:obligationId/assign",
+  requireAdmin,
+  validateRequest(assignObligationSchema),
+  assignObligation
+);
+
+// --- PERIOD ROUTES ---
 router.get("/", validateRequest(listTaxesSchema), getAllTaxes);
+router.post("/", validateRequest(createTaxSchema), requireAdmin, createTax);
+router.put(
+  "/periods/:periodId/status",
+  validateRequest(updateTaxStatusSchema),
+  checkApprovalAccess,
+  updateTaxStatus
+);
+
+// --- OTHER ROUTES ---
 router.get("/clients", validateRequest(listClientsSchema), getTaxClients);
 router.get("/workload", getTaxWorkload);
 router.delete(
@@ -50,19 +82,20 @@ router.delete(
   clearAllLimiter,
   requireAdmin,
   validateRequest(clearAllTaxesSchema),
-  clearAllTaxes,
+  clearAllTaxes
 );
-router.post("/", validateRequest(createTaxSchema), requireAdmin, createTax);
 router.post(
   "/workbook/preview",
   requireAdmin,
   uploadWorkbook.single("file"),
   validateWorkbookMagicBytes,
-  previewTaxWorkbook,
+  previewTaxWorkbook
 );
-router.post("/workbook/confirm", validateRequest(confirmWorkbookImportSchema), requireAdmin, confirmTaxWorkbookImport);
-router.put("/:id/status", validateRequest(updateTaxStatusSchema), checkApprovalAccess, updateTaxStatus);
-router.put("/:id/assign", validateRequest(assignTaxSchema), requireAdmin, assignTax);
-router.put("/client/:clientId/assign", validateRequest(bulkAssignTaxSchema), requireAdmin, bulkAssignClientTaxes);
+router.post(
+  "/workbook/confirm",
+  validateRequest(confirmWorkbookImportSchema),
+  requireAdmin,
+  confirmTaxWorkbookImport
+);
 
 export default router;

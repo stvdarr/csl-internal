@@ -1,7 +1,7 @@
 import os
 
 # Tentukan ekstensi file yang ingin dimasukkan ke dalam teks
-EXTENSIONS_TO_INCLUDE = ['.py', '.js', '.jsx', '.ts', '.tsx', '.html', '.css', '.json', '.md']
+EXTENSIONS_TO_INCLUDE = ['.py', '.js', '.jsx', '.ts', '.tsx', '.html', '.css', '.json']
 # Tentukan folder yang ingin diabaikan (seperti node_modules atau venv)
 FOLDERS_TO_IGNORE = ['node_modules', '.git', 'venv', '__pycache__', 'dist', 'build']
 

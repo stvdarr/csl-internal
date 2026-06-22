@@ -1,17 +1,29 @@
 import { useEffect, useState, useMemo, useContext } from "react";
-import { STATUS_HOTKEYS, STATUS_LABELS, VALID_TRANSITIONS } from "../../constants/taskStatus";
+import {
+  STATUS_HOTKEYS,
+  STATUS_LABELS,
+  VALID_TRANSITIONS,
+} from "../../constants/taskStatus";
 import { AuthContext } from "../../context/AuthContext";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import api from "../../services/api";
-import { User as UserIcon, Loader2, Check, X } from "lucide-react";
+import {
+  User as UserIcon,
+  Loader2,
+  Check,
+  X,
+  LayoutDashboard,
+} from "lucide-react";
+import ClientTaxOverviewModal from "./ClientTaxOverviewModal";
 
-const TaxMatrixView = ({ taxes, activeTab, onStatusChange }) => {
+const TaxMatrixView = ({ taxes, obligations, activeTab, onStatusChange }) => {
   const { user: currentUser } = useContext(AuthContext);
   const isAdmin = currentUser?.role === "Admin";
   const queryClient = useQueryClient();
 
   const [activeCell, setActiveCell] = useState({ row: 0, col: 0 });
-  const [editingPic, setEditingPic] = useState(null); // { clientId }
+  const [editingPic, setEditingPic] = useState(null); // { obligationId }
+  const [overviewClient, setOverviewClient] = useState(null); // { clientId, clientName }
 
   // Fetch staff list for dropdown (only if admin)
   const { data: staff = [] } = useQuery({
@@ -51,55 +63,100 @@ const TaxMatrixView = ({ taxes, activeTab, onStatusChange }) => {
     return { year, quarter, month };
   };
 
-  const { uniquePeriods, matrixData, clientKeys } = useMemo(() => {
-    const periods = [...new Set(taxes.map((t) => t.period))].sort(
-      (a, b) => {
-        const dateA = parsePeriod(a);
-        const dateB = parsePeriod(b);
-        if (dateA.year !== dateB.year) return dateA.year - dateB.year;
-        if (dateA.quarter !== dateB.quarter) return dateA.quarter - dateB.quarter;
-        return dateA.month - dateB.month;
-      },
-    );
+  const { uniquePeriods, matrixData, obligationKeys } = useMemo(() => {
+    let periods = [...new Set(taxes.map((t) => t.period))].sort((a, b) => {
+      const dateA = parsePeriod(a);
+      const dateB = parsePeriod(b);
+      if (dateA.year !== dateB.year) return dateA.year - dateB.year;
+      if (dateA.quarter !== dateB.quarter) return dateA.quarter - dateB.quarter;
+      return dateA.month - dateB.month;
+    });
 
-    const mData = {};
-    taxes.forEach((tax) => {
-      const clientName = tax.Client?.name || tax.clientName;
-      if (!mData[clientName]) {
-        mData[clientName] = {
-          clientId: tax.clientId,
-          pic: tax.User?.name || "No PIC",
-          picId: tax.pic_id,
-          data: {},
-        };
+    // Fallback if no periods exist but obligations do
+    if (periods.length === 0) {
+      if (activeTab === "1771 BADAN" || activeTab === "1770 OP") {
+        periods = ["TAHUNAN"];
+      } else {
+        periods = [
+          "JAN",
+          "FEB",
+          "MAR",
+          "APR",
+          "MEI",
+          "JUN",
+          "JUL",
+          "AGU",
+          "SEP",
+          "OKT",
+          "NOV",
+          "DES",
+        ];
       }
-      mData[clientName].data[tax.period] = {
+    }
+
+    // First build period map by obligationId
+    const periodMap = {};
+    taxes.forEach((tax) => {
+      const obligationId = tax.TaxObligation.id;
+      if (!periodMap[obligationId]) periodMap[obligationId] = {};
+      periodMap[obligationId][tax.period] = {
         id: tax.id,
         status: tax.status,
-        pic_id: tax.pic_id,
-        pic_name: tax.User?.name || "No PIC",
       };
     });
-    
+
+    // Now build matrix from obligations
+    const mData = {};
+    obligations.forEach((obligation) => {
+      const clientName = obligation.Client?.name;
+      if (!clientName) return;
+      mData[obligation.id] = {
+        obligationId: obligation.id,
+        clientName,
+        clientId: obligation.clientId,
+        pic: obligation.User?.name || "No PIC",
+        picId: obligation.pic_id,
+        data: periodMap[obligation.id] || {},
+      };
+    });
+
+    // Sort obligations by client name
+    const sortedObligationKeys = Object.keys(mData).sort((a, b) => {
+      return mData[a].clientName.localeCompare(mData[b].clientName);
+    });
+
     return {
       uniquePeriods: periods,
       matrixData: mData,
-      clientKeys: Object.keys(mData)
+      obligationKeys: sortedObligationKeys,
     };
-  }, [taxes]);
+  }, [taxes, obligations]);
 
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if (clientKeys.length === 0) return;
-      if (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA") return;
+      if (obligationKeys.length === 0) return;
+      if (
+        document.activeElement.tagName === "INPUT" ||
+        document.activeElement.tagName === "TEXTAREA"
+      )
+        return;
 
       let { row, col } = activeCell;
       let handled = false;
 
-      if (e.key === "ArrowUp") { row = Math.max(0, row - 1); handled = true; }
-      else if (e.key === "ArrowDown") { row = Math.min(clientKeys.length - 1, row + 1); handled = true; }
-      else if (e.key === "ArrowLeft") { col = Math.max(0, col - 1); handled = true; }
-      else if (e.key === "ArrowRight") { col = Math.min(uniquePeriods.length - 1, col + 1); handled = true; }
+      if (e.key === "ArrowUp") {
+        row = Math.max(0, row - 1);
+        handled = true;
+      } else if (e.key === "ArrowDown") {
+        row = Math.min(obligationKeys.length - 1, row + 1);
+        handled = true;
+      } else if (e.key === "ArrowLeft") {
+        col = Math.max(0, col - 1);
+        handled = true;
+      } else if (e.key === "ArrowRight") {
+        col = Math.min(uniquePeriods.length - 1, col + 1);
+        handled = true;
+      }
 
       if (handled) {
         e.preventDefault();
@@ -107,10 +164,10 @@ const TaxMatrixView = ({ taxes, activeTab, onStatusChange }) => {
         return;
       }
 
-      const currentClient = clientKeys[activeCell.row];
+      const currentObligationId = obligationKeys[activeCell.row];
       const currentPeriod = uniquePeriods[activeCell.col];
-      if (currentClient && currentPeriod) {
-        const cellData = matrixData[currentClient].data[currentPeriod];
+      if (currentObligationId && currentPeriod) {
+        const cellData = matrixData[currentObligationId].data[currentPeriod];
         if (cellData) {
           const key = e.key.toLowerCase();
           const hotkeys = STATUS_HOTKEYS;
@@ -122,34 +179,69 @@ const TaxMatrixView = ({ taxes, activeTab, onStatusChange }) => {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeCell, matrixData, clientKeys, uniquePeriods, onStatusChange]);
+  }, [activeCell, matrixData, obligationKeys, uniquePeriods, onStatusChange]);
 
   const getStatusColor = (status) => {
     switch (status) {
-      case "COMPLETED": return "bg-emerald-500 text-white border-emerald-600";
+      case "COMPLETED":
+        return "bg-emerald-500 text-white border-emerald-600";
       case "PAID":
-      case "FILED": return "bg-blue-600 text-white border-blue-700";
-      case "NOT_STARTED": return "bg-slate-50 text-slate-400 border-slate-200 shadow-none";
-      case "BLOCKED": return "bg-red-500 text-white border-red-600";
-      default: return "bg-amber-400 text-amber-900 border-amber-500";
+      case "FILED":
+        return "bg-blue-600 text-white border-blue-700";
+      case "NOT_STARTED":
+        return "bg-slate-50 text-slate-400 border-slate-200 shadow-none";
+      case "BLOCKED":
+        return "bg-red-500 text-white border-red-600";
+      default:
+        return "bg-amber-400 text-amber-900 border-amber-500";
     }
   };
 
   return (
     <div className="flex flex-col">
       <div className="mb-3 text-[11px] font-semibold text-slate-600 bg-white px-3 py-2 rounded-lg border border-slate-200 shadow-sm inline-flex items-center gap-4 w-fit">
-        <span className="flex items-center gap-1"><span className="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-300">Arrows</span> Navigasi</span>
+        <span className="flex items-center gap-1">
+          <span className="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-300">
+            Arrows
+          </span>{" "}
+          Navigasi
+        </span>
         <span className="w-px h-4 bg-slate-300"></span>
-        <span className="flex items-center gap-1"><span className="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-300">O</span> Selesai</span>
-        <span className="flex items-center gap-1"><span className="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-300">B</span> Dibayar</span>
-        <span className="flex items-center gap-1"><span className="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-300">K</span> Tunggu Klien</span>
-        <span className="flex items-center gap-1"><span className="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-300">T</span> TTD</span>
-        <span className="flex items-center gap-1"><span className="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-300">R</span> Review</span>
+        <span className="flex items-center gap-1">
+          <span className="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-300">
+            O
+          </span>{" "}
+          Selesai
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-300">
+            B
+          </span>{" "}
+          Dibayar
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-300">
+            K
+          </span>{" "}
+          Tunggu Klien
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-300">
+            T
+          </span>{" "}
+          TTD
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-300">
+            R
+          </span>{" "}
+          Review
+        </span>
       </div>
 
-      <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-sm bg-white custom-scrollbar pb-6">
-        <table className="w-full border-collapse bg-white text-left select-none text-xs">
-          <thead className="bg-slate-50 font-bold uppercase text-slate-600 tracking-wider">
+      <div className="pb-6 overflow-x-auto bg-white border shadow-sm border-slate-200 rounded-xl custom-scrollbar">
+        <table className="w-full text-xs text-left bg-white border-collapse select-none">
+          <thead className="font-bold tracking-wider uppercase bg-slate-50 text-slate-600">
             <tr>
               <th className="px-4 py-3 sticky left-0 bg-slate-50 z-30 min-w-[200px] border-b border-r border-slate-200 shadow-[1px_0_0_0_#e2e8f0]">
                 Nama Klien
@@ -158,50 +250,83 @@ const TaxMatrixView = ({ taxes, activeTab, onStatusChange }) => {
                 PIC
               </th>
               {uniquePeriods.map((period) => (
-                <th key={period} className="px-2 py-3 text-center border-b border-r border-slate-200 min-w-[90px] text-[10px] text-slate-500">
+                <th
+                  key={period}
+                  className="px-2 py-3 text-center border-b border-r border-slate-200 min-w-[90px] text-[10px] text-slate-500"
+                >
                   {period.replace(" ", "\n")}
                 </th>
               ))}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {clientKeys.length === 0 ? (
+            {obligationKeys.length === 0 ? (
               <tr>
-                <td colSpan={uniquePeriods.length + 2} className="px-6 py-16 text-center text-slate-400 font-medium">
-                  Matriks {activeTab} Kosong. Silakan Upload Excel Laporan Bulanan.
+                <td
+                  colSpan={uniquePeriods.length + 2}
+                  className="px-6 py-16 font-medium text-center text-slate-400"
+                >
+                  Matriks {activeTab} Kosong. Silakan Upload Excel Laporan
+                  Bulanan.
                 </td>
               </tr>
             ) : (
-              clientKeys.map((clientName, rowIndex) => {
-                const clientInfo = matrixData[clientName];
+              obligationKeys.map((obligationId, rowIndex) => {
+                const obligationInfo = matrixData[obligationId];
                 return (
-                  <tr key={clientName} className="hover:bg-slate-50/50 transition-colors group">
-                    <td className="px-4 py-2 font-bold text-slate-800 sticky left-0 bg-white group-hover:bg-slate-50 shadow-[1px_0_0_0_#e2e8f0] border-r border-slate-200 z-20 whitespace-nowrap">
-                      {clientName}
+                  <tr
+                    key={obligationId}
+                    className="transition-colors hover:bg-slate-50/50 group"
+                  >
+                    <td
+                      className="sticky left-0 z-20 transition-colors bg-white group-hover:bg-slate-50"
+                      onClick={() =>
+                        setOverviewClient({
+                          clientId: obligationInfo.clientId,
+                          clientName: obligationInfo.clientName,
+                        })
+                      }
+                    >
+                      <div className="px-4 py-2 flex items-center h-full gap-2 font-bold text-slate-800 whitespace-nowrap cursor-pointer hover:text-blue-600 transition-colors shadow-[1px_0_0_0_#e2e8f0] border-r border-slate-200">
+                        {obligationInfo.clientName}
+                        <LayoutDashboard className="w-3.5 h-3.5 text-slate-400 group-hover:text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+                      </div>
                     </td>
                     <td className="px-2 py-2 text-center border-r border-slate-100">
                       {isAdmin ? (
                         <div className="relative flex justify-center">
-                          {editingPic?.clientId === clientInfo.clientId ? (
+                          {editingPic?.obligationId ===
+                          obligationInfo.obligationId ? (
                             <div className="absolute z-50 top-0 bg-white border border-slate-200 shadow-xl rounded-lg p-2 min-w-[150px]">
                               <select
                                 className="w-full text-[10px] p-1 border rounded mb-2"
-                                defaultValue={clientInfo.picId || ""}
+                                defaultValue={obligationInfo.picId || ""}
                                 onChange={async (e) => {
                                   const toUserId = e.target.value;
                                   if (toUserId) {
-                                    await api.put(`/tax/client/${clientInfo.clientId}/assign`, { toUserId, reason: "Bulk change from matrix row" });
+                                    await api.put(
+                                      `/tax/obligations/${obligationInfo.obligationId}/assign`,
+                                      {
+                                        toUserId,
+                                        reason: "Change from matrix row",
+                                      },
+                                    );
                                     queryClient.invalidateQueries(["taxes"]);
+                                    queryClient.invalidateQueries([
+                                      "tax-obligations",
+                                    ]);
                                     setEditingPic(null);
                                   }
                                 }}
                               >
                                 <option value="">Pilih PIC...</option>
                                 {staff.map((s) => (
-                                  <option key={s.id} value={s.id}>{s.name}</option>
+                                  <option key={s.id} value={s.id}>
+                                    {s.name}
+                                  </option>
                                 ))}
                               </select>
-                              <button 
+                              <button
                                 onClick={() => setEditingPic(null)}
                                 className="w-full text-[9px] text-red-500 font-bold hover:underline"
                               >
@@ -210,32 +335,44 @@ const TaxMatrixView = ({ taxes, activeTab, onStatusChange }) => {
                             </div>
                           ) : (
                             <button
-                              onClick={() => setEditingPic({ clientId: clientInfo.clientId })}
+                              onClick={() =>
+                                setEditingPic({
+                                  obligationId: obligationInfo.obligationId,
+                                })
+                              }
                               className="uppercase font-bold text-blue-600 text-[10px] bg-blue-50 px-2 py-1 rounded hover:bg-blue-100 transition-colors border border-blue-100"
                             >
-                              {clientInfo.pic.split(" ")[0]}
+                              {obligationInfo.pic.split(" ")[0]}
                             </button>
                           )}
                         </div>
                       ) : (
                         <span className="uppercase font-bold text-slate-500 text-[10px] bg-slate-100 px-2 py-1 rounded">
-                          {clientInfo.pic.split(" ")[0]}
+                          {obligationInfo.pic.split(" ")[0]}
                         </span>
                       )}
                     </td>
                     {uniquePeriods.map((period, colIndex) => {
-                      const cellData = clientInfo.data[period];
-                      const isActive = activeCell.row === rowIndex && activeCell.col === colIndex;
+                      const cellData = obligationInfo.data[period];
+                      const isActive =
+                        activeCell.row === rowIndex &&
+                        activeCell.col === colIndex;
 
                       return (
                         <td
                           key={period}
-                          onClick={() => setActiveCell({ row: rowIndex, col: colIndex })}
+                          onClick={() =>
+                            setActiveCell({ row: rowIndex, col: colIndex })
+                          }
                           onDoubleClick={() => {
                             if (cellData && cellData.status !== "COMPLETED") {
-                              const allowed = VALID_TRANSITIONS[cellData.status] || [];
+                              const allowed =
+                                VALID_TRANSITIONS[cellData.status] || [];
                               if (allowed.includes("COMPLETED")) {
-                                onStatusChange({ id: cellData.id, newStatus: "COMPLETED" });
+                                onStatusChange({
+                                  id: cellData.id,
+                                  newStatus: "COMPLETED",
+                                });
                               }
                             }
                           }}
@@ -245,12 +382,17 @@ const TaxMatrixView = ({ taxes, activeTab, onStatusChange }) => {
                         >
                           {cellData ? (
                             <div className="relative">
-                              <div className={`w-full py-1.5 font-bold rounded-md text-center border shadow-sm text-[10px] tracking-wide ${getStatusColor(cellData.status)}`}>
-                                {STATUS_LABELS[cellData.status] || cellData.status}
+                              <div
+                                className={`w-full py-1.5 font-bold rounded-md text-center border shadow-sm text-[10px] tracking-wide ${getStatusColor(cellData.status)}`}
+                              >
+                                {STATUS_LABELS[cellData.status] ||
+                                  cellData.status}
                               </div>
                             </div>
                           ) : (
-                            <div className="w-full py-1.5 text-center text-slate-300 font-bold">-</div>
+                            <div className="w-full py-1.5 text-center text-slate-300 font-bold">
+                              -
+                            </div>
                           )}
                         </td>
                       );
@@ -262,6 +404,13 @@ const TaxMatrixView = ({ taxes, activeTab, onStatusChange }) => {
           </tbody>
         </table>
       </div>
+
+      <ClientTaxOverviewModal
+        isOpen={!!overviewClient}
+        onClose={() => setOverviewClient(null)}
+        clientId={overviewClient?.clientId}
+        clientName={overviewClient?.clientName}
+      />
     </div>
   );
 };

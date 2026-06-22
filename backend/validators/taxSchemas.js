@@ -1,3 +1,4 @@
+
 import { z } from "zod";
 import { TASK_STATUSES } from "../constants/taskStatus.js";
 import { CLEAR_ALL_TAX_CONFIRMATION } from "../constants/destructiveActions.js";
@@ -44,50 +45,63 @@ export const createTaxSchema = z.object({
 });
 
 export const updateTaxStatusSchema = z.object({
-  params: idParam,
+  params: z.object({
+    periodId: z.coerce.number().int().positive(),
+  }),
   body: z.object({
     newStatus: z.enum(TASK_STATUSES),
   }),
 });
 
-export const assignTaxSchema = z.object({
-  params: idParam,
-  body: z.object({
-    toUserId: z.coerce.number().int().positive(),
-    reason: z.string().trim().max(255).optional(),
-  }),
-});
-
-export const bulkAssignTaxSchema = z.object({
-  params: z.object({
-    clientId: z.coerce.number().int().positive(),
-  }),
-  body: z.object({
-    toUserId: z.coerce.number().int().positive(),
-    reason: z.string().trim().max(255).optional(),
-  }),
-});
-
 export const confirmWorkbookImportSchema = z.object({
   body: z.object({
-    rows: z.array(
-      z.object({
-        clientName: z.string().trim().min(1).max(180),
-        picName: z.string().trim().max(120).optional().nullable(),
-        taxType: z.string().trim().min(1).max(80),
-        period: z.string().trim().min(1).max(80),
-        status: z.string().trim().min(1).max(40),
-        amount: z.coerce.number().nonnegative().default(0),
-        sourceSheet: z.string().trim().min(1).max(80),
-        sourceRow: z.number().int().positive(),
-        sourceColumn: z.number().int().positive(),
-      }),
-    ).min(1).max(10000),
+    rows: z
+      .array(
+        z.object({
+          clientName: z.string().trim().min(1).max(180),
+          picName: z.string().trim().max(120).optional().nullable(),
+          taxType: z.string().trim().min(1).max(80),
+          period: z.string().trim().min(1).max(80),
+          status: z.string().trim().min(1).max(40),
+          amount: z.coerce.number().nonnegative().default(0),
+          sourceSheet: z.string().trim().min(1).max(80),
+          sourceRow: z.number().int().positive(),
+          sourceColumn: z.number().int().positive(),
+        })
+      )
+      .min(1)
+      .max(10000),
   }),
 });
 
 export const clearAllTaxesSchema = z.object({
   body: z.object({
     confirmation: z.literal(CLEAR_ALL_TAX_CONFIRMATION),
+  }),
+});
+
+// --- NEW SCHEMAS FOR OBLIGATION ---
+export const createObligationSchema = z.object({
+  body: z.object({
+    clientName: z.string().trim().min(1).max(180),
+    taxType: z.string().trim().min(1).max(80),
+    pic_id: z.number().int().positive().optional(),
+  }),
+});
+
+export const listObligationsSchema = z.object({
+  query: z.object({
+    taxType: z.string().trim().max(80).optional(),
+    clientId: z.coerce.number().int().positive().optional(),
+  }),
+});
+
+export const assignObligationSchema = z.object({
+  params: z.object({
+    obligationId: z.coerce.number().int().positive(),
+  }),
+  body: z.object({
+    toUserId: z.coerce.number().int().positive(),
+    reason: z.string().trim().max(255).optional(),
   }),
 });

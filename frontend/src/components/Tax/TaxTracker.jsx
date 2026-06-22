@@ -7,6 +7,7 @@ import { socket } from "../../services/socket";
 import MasterWorkbookUploader from "./MasterWorkbookUploader";
 import TaxMatrixView from "./TaxMatrixView";
 import TaxListView from "./TaxListView";
+import ManualObligationModal from "./ManualObligationModal";
 import { CLEAR_ALL_TAX_CONFIRMATION } from "../../constants/destructiveActions";
 
 const TAX_FETCH_LIMIT = 100;
@@ -43,12 +44,14 @@ const TAX_CATEGORIES = [
 const TaxTracker = () => {
   const [activeTab, setActiveTab] = useState("PPN");
   const [viewMode, setViewMode] = useState("MATRIX");
+  const [isManualModalOpen, setIsManualModalOpen] = useState(false);
 
   const queryClient = useQueryClient();
 
   useEffect(() => {
     const handleConnect = () => {
       queryClient.invalidateQueries({ queryKey: ["taxes"] });
+      queryClient.invalidateQueries({ queryKey: ["tax-obligations"] });
     };
 
     const handleTaxUpdate = (payload) => {
@@ -61,6 +64,9 @@ const TaxTracker = () => {
             : tax,
         );
       });
+
+      // Also invalidate obligations query, because PIC assignment affects it
+      queryClient.invalidateQueries({ queryKey: ["tax-obligations"] });
     };
 
     socket.on("connect", handleConnect);
@@ -72,14 +78,26 @@ const TaxTracker = () => {
     };
   }, [queryClient]);
 
-  const { data: taxes = [], isLoading } = useQuery({
+  const { data: taxes = [], isLoading: taxesLoading } = useQuery({
     queryKey: ["taxes", activeTab],
     queryFn: () => fetchTaxesForType(activeTab),
   });
 
+  const { data: obligations = [], isLoading: obligationsLoading } = useQuery({
+    queryKey: ["tax-obligations", activeTab],
+    queryFn: async () => {
+      const { data } = await api.get("/tax/obligations", {
+        params: { taxType: activeTab },
+      });
+      return data.data;
+    },
+  });
+
+  const isLoading = taxesLoading || obligationsLoading;
+
   const updateStatusMutation = useMutation({
     mutationFn: async ({ id, newStatus }) => {
-      await api.put(`/tax/${id}/status`, { newStatus });
+      await api.put(`/tax/periods/${id}/status`, { newStatus });
     },
     onMutate: async ({ id, newStatus }) => {
       await queryClient.cancelQueries({ queryKey: ["taxes"] });
@@ -106,6 +124,7 @@ const TaxTracker = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["taxes"] });
+      queryClient.invalidateQueries({ queryKey: ["tax-obligations"] });
     },
   });
 
@@ -125,6 +144,7 @@ const TaxTracker = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["taxes"] });
+      queryClient.invalidateQueries({ queryKey: ["tax-obligations"] });
     },
   });
 
@@ -179,6 +199,12 @@ const TaxTracker = () => {
             Laporan {activeTab}
           </h3>
           <button
+            onClick={() => setIsManualModalOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white rounded-lg font-bold transition-colors text-xs shadow-sm border border-blue-100"
+          >
+            + Klien Manual
+          </button>
+          <button
             onClick={handleClearAllData}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 text-red-600 hover:bg-red-600 hover:text-white rounded-lg font-bold transition-colors text-xs shadow-sm border border-red-100"
           >
@@ -214,6 +240,7 @@ const TaxTracker = () => {
         {viewMode === "MATRIX" ? (
           <TaxMatrixView
             taxes={taxes}
+            obligations={obligations}
             activeTab={activeTab}
             onStatusChange={updateStatusMutation.mutate}
           />
@@ -223,8 +250,15 @@ const TaxTracker = () => {
             activeTab={activeTab}
             onStatusChange={updateStatusMutation.mutate}
           />
-        )}
+          )}
       </div>
+
+      <ManualObligationModal
+        isOpen={isManualModalOpen}
+        onClose={() => setIsManualModalOpen(false)}
+        activeTab={activeTab}
+        taxCategories={TAX_CATEGORIES}
+      />
     </div>
   );
 };

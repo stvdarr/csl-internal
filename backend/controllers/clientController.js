@@ -12,6 +12,7 @@
  */
 
 import logger from "../utils/logger.js";
+import { cleanupTempFile } from "../middleware/uploadWorkbook.js";
 import {
   listClientProfiles,
   getClientProfile,
@@ -150,11 +151,13 @@ export const exportClients = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const importClients = async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: "File tidak ditemukan" });
+  }
+
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: "File tidak ditemukan" });
-    }
-    const result = await importClientProfiles(req.file.buffer, req.user);
+    // Change A: pass req.file.path — multer.diskStorage does not populate req.file.buffer
+    const result = await importClientProfiles(req.file.path, req.user);
     return res.status(201).json({
       message: `Import selesai: ${result.success} klien berhasil, ${result.failed} baris gagal.`,
       data:    result,
@@ -162,6 +165,9 @@ export const importClients = async (req, res) => {
   } catch (e) {
     logger.error({ err: e }, "importClients failed");
     return res.status(e.statusCode || 500).json({ error: e.message });
+  } finally {
+    // Change C: always clean up the temp file to prevent unbounded disk growth
+    await cleanupTempFile(req.file.path);
   }
 };
 

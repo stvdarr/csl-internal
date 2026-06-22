@@ -19,7 +19,8 @@ import taxRoutes from "./routes/taxRoutes.js";
 import todoRoutes from "./routes/todoRoutes.js";
 import historyRoutes from "./routes/historyRoutes.js";
 import healthRoutes from "./routes/healthRoutes.js";
-import { backfillTaxClients } from "./services/bootstrapService.js";
+import clientRoutes from "./routes/clientRoutes.js";
+
 import { verifyToken } from "./middleware/authCheck.js";
 import { requireAdmin } from "./middleware/roleCheck.js";
 import { initializeSocketEventBus } from "./services/socketEventBus.js";
@@ -139,6 +140,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/tax", taxRoutes);
 app.use("/api/todo", todoRoutes);
 app.use("/api/history", historyRoutes);
+app.use("/api/clients", clientRoutes);
 
 app.get("/metrics", verifyToken, requireAdmin, async (req, res) => {
   res.set("Content-Type", register.contentType);
@@ -167,15 +169,6 @@ const startServer = async () => {
     // sesuai dengan yang ada di file models/client.js lu.
     await sequelize.sync({ alter: shouldAlterSchema, force: false });
     logger.info("✅ Semua model telah berhasil disinkronisasi ke database!");
-
-    // WS1: P0 Fix - Run backfill asynchronously to prevent startup timeout
-    backfillTaxClients()
-      .then((count) => {
-        if (count > 0) {
-          logger.info({ backfilledCount: count }, `✅ Backfill klien selesai untuk ${count} data pajak lama secara background`);
-        }
-      })
-      .catch((err) => logger.error({ err }, "❌ Backfill data klien gagal"));
 
     server.listen(PORT, () => {
       logger.info(

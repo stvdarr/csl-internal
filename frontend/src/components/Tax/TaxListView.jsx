@@ -36,7 +36,7 @@ const TaxListView = ({ taxes, activeTab, onStatusChange }) => {
             taxes.map((tax) => (
               <tr key={tax.id} className="hover:bg-slate-50/50 transition-colors group">
                 <td className="px-6 py-4 font-bold text-slate-900">
-                  {tax.Client?.name || tax.clientName}
+                  {tax.TaxObligation?.Client?.name}
                 </td>
                 <td className="px-6 py-4 font-semibold text-slate-700">
                   {tax.period}
@@ -46,7 +46,7 @@ const TaxListView = ({ taxes, activeTab, onStatusChange }) => {
                 </td>
                 <td className="px-6 py-4">
                   <span className="bg-slate-100 border border-slate-200 px-2.5 py-1 text-xs font-bold text-slate-600 rounded-md">
-                    {tax.User?.name || "No PIC"}
+                    {tax.TaxObligation?.User?.name || "No PIC"}
                   </span>
                 </td>
                 <td className="px-6 py-4 text-center relative">

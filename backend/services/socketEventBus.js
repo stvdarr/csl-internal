@@ -25,21 +25,34 @@ export const emitTaxUpdated = (taxData) => {
     return;
   }
 
-  const picRoom = `user_${taxData.pic_id}`;
-  io.to(picRoom).emit("TAX_UPDATED", {
-    id: taxData.id,
+  // Handle both TaxPeriod (with TaxObligation) and TaxObligation itself
+  const obligation = taxData.TaxObligation || taxData;
+  const pic_id = obligation.pic_id;
+  const obligationId = obligation.id;
+  const taxType = obligation.taxType;
+
+  const basePayload = {
+    id: taxData.id, // could be periodId or obligationId
     status: taxData.status,
     updatedAt: taxData.updatedAt,
-  });
+    obligationId,
+    taxType,
+  };
+
+  if (pic_id) {
+    const picRoom = `user_${pic_id}`;
+    io.to(picRoom).emit("TAX_UPDATED", basePayload);
+  }
 
   io.to("admin_room").emit("TAX_UPDATED", {
-    id: taxData.id,
-    status: taxData.status,
-    pic_id: taxData.pic_id,
-    updatedAt: taxData.updatedAt,
+    ...basePayload,
+    pic_id,
   });
 
-  logger.info({ taxId: taxData.id }, "📣 Emitted TAX_UPDATED event");
+  logger.info(
+    { taxId: taxData.id, obligationId, taxType },
+    "📣 Emitted TAX_UPDATED event"
+  );
 };
 
 export const emitTodoUpdated = (todoData, { notifyUserIds = [] } = {}) => {

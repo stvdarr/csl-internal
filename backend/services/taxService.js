@@ -1,13 +1,16 @@
+
 import { Op } from "sequelize";
 import {
   sequelize,
-  TaxTrack,
+  TaxObligation,
+  TaxPeriod,
   HistoryLog,
   User,
   Client,
   TaskAssignment,
 } from "../models/index.js";
 import { normalizeTaskStatus, validateStateTransition } from "../constants/taskStatus.js";
+import { resolveFrequency, normalizePeriodLabel } from "../constants/taxFrequency.js";
 import { ROLES } from "../constants/roles.js";
 import { findOrCreateClientByName } from "./clientService.js";
 import { logActivity, logActivityBatch } from "./activityService.js";
@@ -16,11 +19,190 @@ import { runInTransaction } from "../utils/transactionHelper.js";
 import logger from "../utils/logger.js";
 import { emitTaxUpdated } from "./socketEventBus.js";
 
-const taxInclude = [
+// --- HELPERS ---
+const obligationInclude = [
   { model: User, attributes: ["id", "name", "email"] },
   { model: Client, attributes: ["id", "name", "taxIdNumber", "status"] },
 ];
 
+const periodInclude = [
+  {
+    model: TaxObligation,
+    include: obligationInclude,
+  },
+];
+
+/**
+ * Find or create tax obligation for a client and tax type
+ */
+export const findOrCreateObligation = async ({ clientId, taxType, pic_id, transaction }) => {
+  const frequency = resolveFrequency(taxType);
+  const [obligation, created] = await TaxObligation.findOrCreate({
+    where: { clientId, taxType },
+    defaults: {
+      clientId,
+      taxType,
+      frequency,
+      pic_id: pic_id || null,
+      status: "ACTIVE",
+    },
+    transaction,
+  });
+  return { obligation, created };
+};
+
+// --- TAX OBLIGATION FUNCTIONS ---
+export const listTaxObligations = async ({ taxType, clientId, currentUser }) => {
+  const where = {};
+
+  if (currentUser.role !== ROLES.ADMIN) {
+    where.pic_id = currentUser.id;
+  }
+
+  if (taxType) where.taxType = taxType;
+  if (clientId) where.clientId = clientId;
+
+  const obligations = await TaxObligation.findAll({
+    where,
+    include: obligationInclude,
+    order: [["updatedAt", "DESC"]],
+  });
+
+  return obligations;
+};
+
+export const createTaxObligation = async ({ clientName, taxType, pic_id }, actor) => {
+  return runInTransaction(async (transaction) => {
+    const client = await findOrCreateClientByName(clientName, transaction);
+    const frequency = resolveFrequency(taxType);
+
+    // Check if obligation already exists
+    const existingObligation = await TaxObligation.findOne({
+      where: { clientId: client.id, taxType },
+      transaction,
+    });
+
+    if (existingObligation) {
+      const error = new Error("Obligasi pajak untuk klien dan jenis pajak ini sudah ada");
+      error.statusCode = 409;
+      throw error;
+    }
+
+    const obligation = await TaxObligation.create(
+      {
+        clientId: client.id,
+        taxType,
+        frequency,
+        pic_id: pic_id || null,
+        status: "ACTIVE",
+      },
+      { transaction },
+    );
+
+    if (pic_id) {
+      await TaskAssignment.create(
+        {
+          targetType: "TAX",
+          targetId: obligation.id,
+          fromUserId: null,
+          toUserId: pic_id,
+          assignedById: actor.id,
+          reason: "Initial assignment for tax obligation",
+        },
+        { transaction },
+      );
+    }
+
+    await logActivity({
+      actionType: "CREATED_OBLIGATION",
+      actorId: actor.id,
+      targetType: "TAX",
+      targetId: obligation.id,
+      metadata: {
+        clientId: client.id,
+        clientName: client.name,
+        taxType,
+        frequency,
+      },
+      transaction,
+    });
+
+    return TaxObligation.findByPk(obligation.id, {
+      include: obligationInclude,
+      transaction,
+    });
+  });
+};
+
+export const assignTaxObligation = async (obligationId, toUserId, actor, reason) => {
+  return runInTransaction(async (transaction) => {
+    const obligation = await TaxObligation.findByPk(obligationId, {
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+      include: obligationInclude,
+    });
+
+    if (!obligation) {
+      const error = new Error("Obligasi pajak tidak ditemukan");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const assignee = await User.findByPk(toUserId, {
+      attributes: ["id", "name", "email"],
+      transaction,
+    });
+
+    if (!assignee) {
+      const error = new Error("User tujuan tidak ditemukan");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const fromUserId = obligation.pic_id;
+    obligation.pic_id = toUserId;
+    await obligation.save({ transaction });
+
+    await TaskAssignment.create(
+      {
+        targetType: "TAX",
+        targetId: obligation.id,
+        fromUserId,
+        toUserId,
+        assignedById: actor.id,
+        reason: reason || "Assignment update",
+      },
+      { transaction },
+    );
+
+    await logActivity({
+      actionType: "ASSIGNED_OBLIGATION",
+      actorId: actor.id,
+      targetType: "TAX",
+      targetId: obligation.id,
+      metadata: { fromUserId, toUserId, reason },
+      transaction,
+    });
+
+    // Emit update for all periods under this obligation
+    const periods = await TaxPeriod.findAll({
+      where: { obligationId },
+      transaction,
+      include: periodInclude,
+    });
+
+    for (const period of periods) {
+      emitTaxUpdated(period);
+    }
+
+    return TaxObligation.findByPk(obligation.id, {
+      include: obligationInclude,
+      transaction,
+    });
+  });
+};
+
+// --- TAX PERIOD FUNCTIONS ---
 export const listTaxes = async ({
   assigneeId,
   status,
@@ -29,29 +211,37 @@ export const listTaxes = async ({
   page = 1,
   limit = 20,
   currentUser,
-} = {}) => {
-  const where = {};
-  
-  // Enforce access control at service layer
+}) => {
+  const wherePeriod = {};
+  const whereObligation = {};
+
+  // Enforce access control at service level
   if (currentUser.role !== ROLES.ADMIN) {
-    where.pic_id = currentUser.id;
+    whereObligation.pic_id = currentUser.id;
   } else if (assigneeId) {
     // Only admin can filter by assigneeId
-    where.pic_id = assigneeId;
+    whereObligation.pic_id = assigneeId;
   }
-  
-  if (status) where.status = normalizeTaskStatus(status);
-  if (clientId) where.clientId = clientId;
-  if (taxType) where.taxType = taxType;
+
+  if (status) wherePeriod.status = normalizeTaskStatus(status);
+  if (taxType) whereObligation.taxType = taxType;
+  if (clientId) whereObligation.clientId = clientId;
 
   const offset = (page - 1) * limit;
 
-  const { count, rows } = await TaxTrack.findAndCountAll({
-    where,
-    include: taxInclude,
+  const { count, rows } = await TaxPeriod.findAndCountAll({
+    where: wherePeriod,
+    include: [
+      {
+        model: TaxObligation,
+        where: whereObligation,
+        include: obligationInclude,
+      },
+    ],
     order: [["updatedAt", "DESC"]],
     limit: parseInt(limit),
     offset: parseInt(offset),
+    distinct: true,
   });
 
   return {
@@ -61,29 +251,6 @@ export const listTaxes = async ({
     data: rows,
   };
 };
-export const resetAllTaxData = async (actor) => {
-  return runInTransaction(async (transaction) => {
-    const [taxCount, assignmentCount] = await Promise.all([
-      TaxTrack.count({ transaction }),
-      TaskAssignment.count({ transaction }),
-    ]);
-
-    await logActivity({
-      actionType: "DELETED_ALL_TAX_DATA",
-      actorId: actor.id,
-      targetType: "TAX",
-      targetId: 0,
-      metadata: { taxCount, assignmentCount },
-      legacy: { recordType: "TAX", recordId: 0 },
-      transaction,
-    });
-
-    await TaskAssignment.destroy({ where: {}, transaction });
-    await TaxTrack.destroy({ where: {}, transaction });
-
-    return { taxCount, assignmentCount };
-  });
-};
 
 export const createTaxTask = async (payload, actor) => {
   return runInTransaction(async (transaction) => {
@@ -91,276 +258,123 @@ export const createTaxTask = async (payload, actor) => {
       payload.clientName,
       transaction,
     );
-    const picId =
-      actor.role === ROLES.ADMIN && payload.pic_id ? payload.pic_id : actor.id;
-    const assignee = await User.findByPk(picId, {
-      attributes: ["id"],
+
+    // Find or create obligation
+    const { obligation } = await findOrCreateObligation({
+      clientId: client.id,
+      taxType: payload.taxType,
+      pic_id: payload.pic_id,
       transaction,
     });
 
-    if (!assignee) {
-      const error = new Error("PIC tidak ditemukan");
-      error.statusCode = 404;
-      throw error;
-    }
+    const normalizedPeriod = normalizePeriodLabel(
+      payload.period,
+      obligation.frequency,
+    );
 
-    const tax = await TaxTrack.create(
-      {
-        clientId: client.id,
-        clientName: client.name,
-        taxType: payload.taxType,
-        period: payload.period,
+    // Create or update period
+    const [period, created] = await TaxPeriod.findOrCreate({
+      where: {
+        obligationId: obligation.id,
+        period: normalizedPeriod,
+      },
+      defaults: {
+        obligationId: obligation.id,
+        period: normalizedPeriod,
         amount: payload.amount ?? 0,
         status: normalizeTaskStatus(payload.status || "NOT_STARTED"),
-        pic_id: picId,
       },
-      { transaction },
-    );
+      transaction,
+    });
 
-    await TaskAssignment.create(
-      {
-        targetType: "TAX",
-        targetId: tax.id,
-        fromUserId: null,
-        toUserId: picId,
-        assignedById: actor.id,
-        reason: "Initial assignment",
-      },
-      { transaction },
-    );
+    if (!created) {
+      period.amount = payload.amount ?? 0;
+      period.status = normalizeTaskStatus(payload.status || "NOT_STARTED");
+      await period.save({ transaction });
+    }
 
     await logActivity({
-      actionType: "CREATED_TASK",
+      actionType: created ? "CREATED_TASK" : "UPDATED_TASK",
       actorId: actor.id,
       targetType: "TAX",
-      targetId: tax.id,
+      targetId: period.id,
       metadata: {
         clientId: client.id,
         clientName: client.name,
-        taxType: tax.taxType,
-        period: tax.period,
+        taxType: obligation.taxType,
+        period: normalizedPeriod,
       },
-      legacy: { recordType: "TAX", recordId: tax.id, newStatus: tax.status },
       transaction,
     });
 
-    await logActivity({
-      actionType: "ASSIGNED_TASK",
-      actorId: actor.id,
-      targetType: "TAX",
-      targetId: tax.id,
-      metadata: { fromUserId: null, toUserId: picId },
+    return TaxPeriod.findByPk(period.id, {
+      include: periodInclude,
       transaction,
     });
-
-    return TaxTrack.findByPk(tax.id, { include: taxInclude, transaction });
   });
 };
 
-export const updateTaxTaskStatus = async (id, newStatus, actor) => {
+export const updateTaxTaskStatus = async (periodId, newStatus, actor) => {
   return runInTransaction(async (transaction) => {
     const normalizedStatus = normalizeTaskStatus(newStatus);
-    
-    // WS2: Implementation of Row-Level Locking (FOR UPDATE)
-    const tax = await TaxTrack.findByPk(id, { 
+
+    const period = await TaxPeriod.findByPk(periodId, {
       transaction,
-      lock: transaction.LOCK.UPDATE 
+      lock: transaction.LOCK.UPDATE,
+      include: periodInclude,
     });
 
-    if (!tax) {
-      const error = new Error("Data pajak tidak ditemukan");
+    if (!period) {
+      const error = new Error("Periode pajak tidak ditemukan");
       error.statusCode = 404;
       throw error;
     }
 
-    // Task 2: Cek Kepemilikan (Ownership Check)
-    // Hanya penanggung jawab (PIC) atau Admin yang boleh mengubah status
-    if (tax.pic_id !== actor.id && actor.role !== ROLES.ADMIN) {
-      const error = new Error("Akses Ditolak. Anda bukan penanggung jawab (PIC) untuk data pajak ini.");
+    // Check ownership
+    if (
+      period.TaxObligation.pic_id !== actor.id &&
+      actor.role !== ROLES.ADMIN
+    ) {
+      const error = new Error(
+        "Akses Ditolak. Anda bukan penanggung jawab untuk pajak ini.",
+      );
       error.statusCode = 403;
       throw error;
     }
 
-    const oldStatus = tax.status;
+    const oldStatus = period.status;
     if (oldStatus === normalizedStatus) {
       const error = new Error("Status sudah sama, tidak ada perubahan");
       error.statusCode = 400;
       throw error;
     }
 
-    // Task 5: Validasi State Machine transisi
+    // Validate state transition
     validateStateTransition(oldStatus, normalizedStatus, actor.role);
 
-    tax.status = normalizedStatus;
-    await tax.save({ transaction });
+    period.status = normalizedStatus;
+    await period.save({ transaction });
 
     await logActivity({
       actionType: "UPDATED_STATUS",
       actorId: actor.id,
       targetType: "TAX",
-      targetId: tax.id,
+      targetId: period.id,
       metadata: { oldStatus, newStatus: normalizedStatus },
-      legacy: {
-        recordType: "TAX",
-        recordId: tax.id,
-        oldStatus,
-        newStatus: normalizedStatus,
-      },
       transaction,
     });
 
-    const updatedTax = await TaxTrack.findByPk(tax.id, { include: taxInclude, transaction });
-    // Emit WebSocket event via SocketEventBus
-    emitTaxUpdated(updatedTax);
-    return updatedTax;
-  });
-};
-
-export const assignTaxTask = async (id, toUserId, actor, reason) => {
-  return runInTransaction(async (transaction) => {
-    // WS2: Implementation of Row-Level Locking (FOR UPDATE)
-    const [tax, assignee] = await Promise.all([
-      TaxTrack.findByPk(id, { 
-        transaction,
-        lock: transaction.LOCK.UPDATE 
-      }),
-      User.findByPk(toUserId, {
-        attributes: ["id", "name", "email"],
-        transaction,
-      }),
-    ]);
-
-    if (!tax) {
-      const error = new Error("Data pajak tidak ditemukan");
-      error.statusCode = 404;
-      throw error;
-    }
-    if (!assignee) {
-      const error = new Error("User tujuan assignment tidak ditemukan");
-      error.statusCode = 404;
-      throw error;
-    }
-
-    const fromUserId = tax.pic_id || null;
-    tax.pic_id = assignee.id;
-    await tax.save({ transaction });
-
-    await TaskAssignment.create(
-      {
-        targetType: "TAX",
-        targetId: tax.id,
-        fromUserId,
-        toUserId: assignee.id,
-        assignedById: actor.id,
-        reason,
-      },
-      { transaction },
-    );
-
-    await logActivity({
-      actionType: "ASSIGNED_TASK",
-      actorId: actor.id,
-      targetType: "TAX",
-      targetId: tax.id,
-      metadata: { fromUserId, toUserId: assignee.id, reason },
+    const updatedPeriod = await TaxPeriod.findByPk(period.id, {
+      include: periodInclude,
       transaction,
     });
 
-    const updatedTax = await TaxTrack.findByPk(tax.id, { include: taxInclude, transaction });
-    emitTaxUpdated(updatedTax);
-    return updatedTax;
+    emitTaxUpdated(updatedPeriod);
+    return updatedPeriod;
   });
 };
 
-export const assignTaxTasksByClient = async (clientId, toUserId, actor, reason) => {
-  return runInTransaction(async (transaction) => {
-    // 1. Validasi User Tujuan
-    const assignee = await User.findByPk(toUserId, {
-      attributes: ["id", "name", "email"],
-      transaction,
-    });
-
-    if (!assignee) {
-      const error = new Error("User tujuan assignment tidak ditemukan");
-      error.statusCode = 404;
-      throw error;
-    }
-
-    // 2. Ambil semua TaxTrack untuk klien ini yang need updating
-    const taxesToUpdate = await TaxTrack.findAll({
-      where: { 
-        clientId,
-        pic_id: { [Op.ne]: assignee.id }
-      },
-      attributes: ["id", "pic_id"],
-      transaction,
-      lock: transaction.LOCK.UPDATE,
-    });
-
-    if (taxesToUpdate.length === 0) {
-      return { count: 0 };
-    }
-
-    // 3. Bulk update all TaxTrack records in one query
-    await TaxTrack.update(
-      { pic_id: assignee.id },
-      {
-        where: { id: taxesToUpdate.map(t => t.id) },
-        transaction
-      }
-    );
-
-    // 4. Prepare assignments and logs
-    const assignments = taxesToUpdate.map(tax => ({
-      targetType: "TAX",
-      targetId: tax.id,
-      fromUserId: tax.pic_id,
-      toUserId: assignee.id,
-      assignedById: actor.id,
-      reason,
-    }));
-
-    const logs = taxesToUpdate.map(tax => ({
-      actionType: "ASSIGNED_TASK",
-      actorId: actor.id,
-      targetType: "TAX",
-      targetId: tax.id,
-      metadata: { fromUserId: tax.pic_id, toUserId: assignee.id, reason },
-    }));
-
-    // 5. Bulk create assignments and logs
-    await TaskAssignment.bulkCreate(assignments, { transaction });
-    await logActivityBatch(logs, transaction);
-
-    return { count: taxesToUpdate.length };
-  });
-};
-
-const buildUserLookup = async (transaction) => {
-  const users = await User.findAll({
-    attributes: ["id", "name", "email"],
-    transaction,
-  });
-
-  return users.reduce((lookup, user) => {
-    // Standardize to consistent key format for comparison
-    lookup[normalizeName(user.name)] = user;
-    return lookup;
-  }, {});
-};
-
-const buildClientLookup = async (transaction) => {
-  const clients = await Client.findAll({
-    attributes: ["id", "name", "normalizedName"],
-    transaction,
-  });
-
-  return clients.reduce((lookup, client) => {
-    lookup[client.normalizedName] = client;
-    return lookup;
-  }, {});
-};
-
+// --- WORKBOOK IMPORT ---
 export const importTaxWorkbookRows = async (rows, actor) => {
   const BATCH_SIZE = 100;
   const results = {
@@ -374,6 +388,7 @@ export const importTaxWorkbookRows = async (rows, actor) => {
 
   let userByName = {};
   let clientByName = {};
+  let obligationByClientTaxType = {};
 
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
     const chunk = rows.slice(i, i + BATCH_SIZE);
@@ -388,17 +403,43 @@ export const importTaxWorkbookRows = async (rows, actor) => {
 
     try {
       await runInTransaction(async (transaction) => {
-        Object.assign(userByName, await buildUserLookup(transaction));
-        Object.assign(clientByName, await buildClientLookup(transaction));
+        // Preload users
+        const users = await User.findAll({
+          attributes: ["id", "name", "email"],
+          transaction,
+        });
+        userByName = users.reduce((lookup, user) => {
+          lookup[normalizeName(user.name)] = user;
+          return lookup;
+        }, {});
+
+        // Preload clients
+        const clients = await Client.findAll({
+          attributes: ["id", "name", "normalizedName"],
+          transaction,
+        });
+        clientByName = clients.reduce((lookup, client) => {
+          lookup[client.normalizedName] = client;
+          return lookup;
+        }, {});
+
+        // Preload obligations
+        const obligations = await TaxObligation.findAll({
+          include: [Client],
+          transaction,
+        });
+        obligationByClientTaxType = {};
+        for (const obl of obligations) {
+          const key = `${obl.clientId}-${obl.taxType}`;
+          obligationByClientTaxType[key] = obl;
+        }
 
         const historyLogs = [];
 
         for (let j = 0; j < chunk.length; j++) {
           const row = chunk[j];
           try {
-            const cleanName = String(row.clientName || "")
-              .trim()
-              .replace(/\s+/g, " ");
+            const cleanName = String(row.clientName || "").trim().replace(/\s+/g, " ");
             const normalizedClientKey = normalizeName(cleanName);
 
             let client = clientByName[normalizedClientKey];
@@ -410,93 +451,64 @@ export const importTaxWorkbookRows = async (rows, actor) => {
             const normalizedPicName = row.picName
               ? normalizeName(row.picName)
               : null;
-            const picId = normalizedPicName
+            const pic_id = normalizedPicName
               ? userByName[normalizedPicName]?.id || null
               : null;
 
-            const existing = await TaxTrack.findOne({
-              where: {
-                clientId: client.id,
-                taxType: row.taxType,
-                period: row.period,
-              },
-              include: [{ model: User, attributes: ["id", "name"] }],
-              transaction,
-            });
+            const obligationKey = `${client.id}-${row.taxType}`;
+            let obligation = obligationByClientTaxType[obligationKey];
 
-            if (!existing) {
-              const tax = await TaxTrack.create(
+            if (!obligation) {
+              const createdObligation = await TaxObligation.create(
                 {
                   clientId: client.id,
-                  clientName: client.name,
                   taxType: row.taxType,
-                  period: row.period,
-                  status: row.status || "NOT_STARTED",
-                  pic_id: picId,
-                  amount: row.amount || 0,
+                  frequency: resolveFrequency(row.taxType),
+                  pic_id,
+                  status: "ACTIVE",
                 },
                 { transaction },
               );
+              obligation = createdObligation;
+              obligationByClientTaxType[obligationKey] = obligation;
+            } else if (pic_id && !obligation.pic_id) {
+              // If obligation didn't have a PIC, set it from first row that has one
+              obligation.pic_id = pic_id;
+              await obligation.save({ transaction });
+            }
 
-              historyLogs.push({
-                actionType: "CREATED_TASK",
-                actorId: actor.id,
-                targetType: "TAX",
-                targetId: tax.id,
-                metadata: row,
-                legacy: {
-                  recordType: "TAX",
-                  recordId: tax.id,
-                  newStatus: tax.status,
+            const normalizedPeriod = normalizePeriodLabel(
+              row.period,
+              obligation.frequency,
+            );
+
+            const existingPeriod = await TaxPeriod.findOne({
+              where: {
+                obligationId: obligation.id,
+                period: normalizedPeriod,
+              },
+              transaction,
+            });
+
+            if (!existingPeriod) {
+              await TaxPeriod.create(
+                {
+                  obligationId: obligation.id,
+                  period: normalizedPeriod,
+                  amount: row.amount || 0,
+                  status: row.status || "NOT_STARTED",
                 },
-              });
+                { transaction },
+              );
               chunkStats.created++;
             } else {
-              const hasStatusChange = existing.status !== row.status;
-              const hasPicChange = existing.pic_id !== picId;
-              const hasAmountChange =
-                Number(existing.amount) !== Number(row.amount || 0);
+              const hasStatusChange = existingPeriod.status !== row.status;
+              const hasAmountChange = Number(existingPeriod.amount) !== Number(row.amount || 0);
 
-              if (hasStatusChange || hasPicChange || hasAmountChange) {
-                const oldStatus = existing.status;
-                const oldPicId = existing.pic_id;
-
-                await existing.update(
-                  {
-                    status: row.status,
-                    pic_id: picId,
-                    amount: row.amount || 0,
-                  },
-                  { transaction },
-                );
-
-                if (hasPicChange) {
-                  await TaskAssignment.create(
-                    {
-                      targetType: "TAX",
-                      targetId: existing.id,
-                      fromUserId: oldPicId,
-                      toUserId: picId,
-                      assignedById: actor.id,
-                      reason: "Updated from workbook import",
-                    },
-                    { transaction },
-                  );
-                }
-
-                historyLogs.push({
-                  actionType: "UPDATED_FROM_IMPORT",
-                  actorId: actor.id,
-                  targetType: "TAX",
-                  targetId: existing.id,
-                  metadata: { ...row, oldStatus },
-                  legacy: {
-                    recordType: "TAX",
-                    recordId: existing.id,
-                    oldStatus,
-                    newStatus: row.status,
-                  },
-                });
+              if (hasStatusChange || hasAmountChange) {
+                existingPeriod.status = row.status;
+                existingPeriod.amount = row.amount || 0;
+                await existingPeriod.save({ transaction });
                 chunkStats.updated++;
               } else {
                 chunkStats.unchanged++;
@@ -541,91 +553,128 @@ export const importTaxWorkbookRows = async (rows, actor) => {
     }
   }
 
-  // Map results for legacy frontend compatibility
   return {
     ...results,
     success: results.created + results.updated + results.unchanged,
   };
 };
 
-export const getWorkloadSummary = async () => {
-  // Use aggregation to avoid fetching all records
-  const counts = await TaxTrack.findAll({
-    attributes: [
-      "pic_id",
-      "status",
-      [sequelize.fn("COUNT", sequelize.col("id")), "count"],
-    ],
-    where: {
-      status: { [Op.ne]: "COMPLETED" },
-    },
-    group: ["pic_id", "status"],
-    raw: true,
-  });
+// --- RESET ALL TAX DATA ---
+export const resetAllTaxData = async (actor) => {
+  return runInTransaction(async (transaction) => {
+    const [obligationCount, periodCount, assignmentCount] = await Promise.all([
+      TaxObligation.count({ transaction }),
+      TaxPeriod.count({ transaction }),
+      TaskAssignment.count({ where: { targetType: "TAX" }, transaction }),
+    ]);
 
-  const users = await User.findAll({
-    attributes: ["id", "name", "email", "role"],
-    where: { role: ROLES.STAFF },
-  });
+    await logActivity({
+      actionType: "DELETED_ALL_TAX_DATA",
+      actorId: actor.id,
+      targetType: "TAX",
+      targetId: 0,
+      metadata: { obligationCount, periodCount, assignmentCount },
+      transaction,
+    });
 
-  return {
-    data: users.map((user) => {
-      const userCounts = counts.filter((c) => c.pic_id === user.id);
-      return {
-        user: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-        },
-        openTaskCount: userCounts.reduce(
-          (acc, curr) => acc + parseInt(curr.count),
-          0,
-        ),
-        blockedTaskCount: userCounts
-          .filter((c) => c.status === "BLOCKED")
-          .reduce((acc, curr) => acc + parseInt(curr.count), 0),
-        waitingTaskCount: userCounts
-          .filter((c) => c.status.startsWith("WAITING"))
-          .reduce((acc, curr) => acc + parseInt(curr.count), 0),
-      };
-    }),
-  };
+    // Delete periods first because of foreign key constraint
+    await TaxPeriod.destroy({ where: {}, transaction });
+    await TaxObligation.destroy({ where: {}, transaction });
+    await TaskAssignment.destroy({ where: { targetType: "TAX" }, transaction });
+
+    return { obligationCount, periodCount, assignmentCount };
+  });
 };
 
+// --- WORKLOAD SUMMARY ---
+export const getWorkloadSummary = async () => {
+  // Aggregate by obligation's pic_id
+  const obligations = await TaxObligation.findAll({
+    include: [
+      {
+        model: TaxPeriod,
+        where: {
+          status: { [Op.ne]: "COMPLETED" },
+        },
+        required: false,
+      },
+      {
+        model: User,
+        attributes: ["id", "name", "email", "role"],
+        where: { role: ROLES.STAFF },
+        required: true,
+      },
+    ],
+  });
+
+  // Group by user
+  const userWorkload = {};
+
+  for (const obl of obligations) {
+    if (!userWorkload[obl.pic_id]) {
+      userWorkload[obl.pic_id] = {
+        user: obl.User,
+        openTaskCount: 0,
+        blockedTaskCount: 0,
+        waitingTaskCount: 0,
+      };
+    }
+
+    for (const period of obl.TaxPeriods || []) {
+      userWorkload[obl.pic_id].openTaskCount++;
+      if (period.status === "BLOCKED") {
+        userWorkload[obl.pic_id].blockedTaskCount++;
+      } else if (period.status.startsWith("WAITING")) {
+        userWorkload[obl.pic_id].waitingTaskCount++;
+      }
+    }
+  }
+
+  return { data: Object.values(userWorkload) };
+};
+
+// --- CLIENT TAX OVERVIEW ---
 export const getClientTaxOverview = async ({
   page = 1,
   limit = 20,
   search = "",
   currentUser,
-} = {}) => {
-  const where = {};
+}) => {
+  const whereClient = {};
+  const whereObligation = {};
+
   if (search) {
-    where.name = { [Op.like]: `%${search}%` };
+    whereClient.name = { [Op.like]: `%${search}%` };
+  }
+
+  if (currentUser.role !== ROLES.ADMIN) {
+    whereObligation.pic_id = currentUser.id;
   }
 
   const offset = (page - 1) * limit;
 
-  const taxWhere = {};
-  // For non-admin users, filter tax tracks to only their assigned ones
-  if (currentUser.role !== ROLES.ADMIN) {
-    taxWhere.pic_id = currentUser.id;
-  }
-
   const { count, rows } = await Client.findAndCountAll({
-    where,
+    where: whereClient,
     include: [
       {
-        model: TaxTrack,
-        where: Object.keys(taxWhere).length > 0 ? taxWhere : undefined,
-        include: [{ model: User, attributes: ["id", "name", "email"] }],
+        model: TaxObligation,
+        where: Object.keys(whereObligation).length > 0 ? whereObligation : undefined,
         required: false,
+        include: [
+          {
+            model: TaxPeriod,
+          },
+          {
+            model: User,
+            attributes: ["id", "name", "email"],
+          },
+        ],
       },
     ],
     order: [["name", "ASC"]],
     limit: parseInt(limit),
     offset: parseInt(offset),
-    distinct: true, // Required for correct count with joins
+    distinct: true,
   });
 
   return {
@@ -637,13 +686,7 @@ export const getClientTaxOverview = async ({
       name: client.name,
       taxIdNumber: client.taxIdNumber,
       status: client.status,
-      openTaskCount: client.TaxTracks.filter(
-        (task) => task.status !== "COMPLETED",
-      ).length,
-      totalTaskCount: client.TaxTracks.length,
-      tasks: client.TaxTracks, // Kembalikan array tasks agar frontend matrix bisa render per cell
+      obligations: client.TaxObligations || [],
     })),
   };
 };
-
-

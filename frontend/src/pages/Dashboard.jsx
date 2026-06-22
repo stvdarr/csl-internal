@@ -4,7 +4,8 @@ import { motion, AnimatePresence } from "framer-motion";
 import TaxTracker from "../components/Tax/TaxTracker";
 import ToDoList from "../components/ToDoList";
 import HistoryLogViewer from "../components/HistoryLogViewer";
-import { LogOut, LayoutDashboard, CheckSquare, History, Users, UserPlus, Eye, EyeOff, AlertCircle, Loader2, CheckCircle2 } from "lucide-react";
+import ClientManager from "../components/Client/ClientManager";
+import { LogOut, LayoutDashboard, CheckSquare, History, Users, UserPlus, Eye, EyeOff, AlertCircle, Loader2, CheckCircle2, Shield } from "lucide-react";
 import api from "../services/api";
 import { ROLES } from "../constants/roles";
 
@@ -31,10 +32,11 @@ const Dashboard = () => {
   const isAdmin = user?.role === ROLES.ADMIN;
 
   const tabs = [
+    { id: "CLIENT", label: "Data Klien", icon: Users },
     { id: "TAX", label: "Tracking Pajak", icon: LayoutDashboard },
     { id: "TODO", label: "To-Do List", icon: CheckSquare },
     { id: "HISTORY", label: "Audit Log", icon: History },
-    ...(isAdmin ? [{ id: "ADMIN", label: "Admin Panel", icon: Users }] : []),
+    ...(isAdmin ? [{ id: "ADMIN", label: "Admin Panel", icon: Shield }] : []),
   ];
 
   // Fetch staff list
@@ -188,6 +190,7 @@ const Dashboard = () => {
               exit={{ opacity: 0, y: -15 }}
               transition={{ duration: 0.2, ease: "easeOut" }}
             >
+              {activeTab === "CLIENT" && <ClientManager />}
               {activeTab === "TAX" && <TaxTracker />}
               {activeTab === "TODO" && <ToDoList />}
               {activeTab === "HISTORY" && (

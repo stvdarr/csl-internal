@@ -1,13 +1,15 @@
+
 import {
-  assignTaxTask,
-  assignTaxTasksByClient,
-  createTaxTask,
-  getClientTaxOverview,
-  getWorkloadSummary,
-  importTaxWorkbookRows,
+  createTaxObligation,
+  listTaxObligations,
+  assignTaxObligation,
   listTaxes,
-  resetAllTaxData,
+  createTaxTask,
   updateTaxTaskStatus,
+  importTaxWorkbookRows,
+  getWorkloadSummary,
+  getClientTaxOverview,
+  resetAllTaxData,
 } from "../services/taxService.js";
 import { parseTaxWorkbookFile } from "../services/taxWorkbookParser.js";
 import { cleanupTempFile } from "../middleware/uploadWorkbook.js";
@@ -31,6 +33,56 @@ export const clearAllTaxes = async (req, res) => {
   }
 };
 
+// --- OBLIGATION ENDPOINTS ---
+export const createObligation = async (req, res) => {
+  try {
+    const obligation = await createTaxObligation(req.body, req.user);
+    res.status(201).json({
+      message: "Obligasi pajak berhasil dibuat",
+      data: obligation,
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      error: `Gagal membuat obligasi: ${error.message}`,
+    });
+  }
+};
+
+export const getObligations = async (req, res) => {
+  try {
+    const obligations = await listTaxObligations({
+      ...req.query,
+      currentUser: req.user,
+    });
+    res.status(200).json({ data: obligations });
+  } catch (error) {
+    logger.error(error, "Error in getObligations");
+    res.status(500).json({ error: "Gagal mengambil obligasi pajak" });
+  }
+};
+
+export const assignObligation = async (req, res) => {
+  try {
+    const { obligationId } = req.params;
+    const { toUserId, reason } = req.body;
+    const updatedObligation = await assignTaxObligation(
+      obligationId,
+      toUserId,
+      req.user,
+      reason,
+    );
+    res.status(200).json({
+      message: "PIC berhasil diperbarui!",
+      data: updatedObligation,
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      error: `Gagal mengubah assignment: ${error.message}`,
+    });
+  }
+};
+
+// --- PERIOD ENDPOINTS ---
 export const getAllTaxes = async (req, res) => {
   try {
     const result = await listTaxes({ ...req.query, currentUser: req.user });
@@ -49,7 +101,7 @@ export const createTax = async (req, res) => {
       .json({ message: "Data pajak berhasil dibuat", data: newTax });
   } catch (error) {
     res
-      .status(500)
+      .status(error.statusCode || 500)
       .json({ error: `Gagal membuat data pajak: ${error.message}` });
   }
 };
@@ -57,11 +109,10 @@ export const createTax = async (req, res) => {
 export const updateTaxStatus = async (req, res) => {
   try {
     const taxData = await updateTaxTaskStatus(
-      req.params.id,
+      req.params.periodId,
       req.body.newStatus,
       req.user,
     );
-
     res
       .status(200)
       .json({ message: "Status pajak berhasil diperbarui!", data: taxData });
@@ -73,6 +124,7 @@ export const updateTaxStatus = async (req, res) => {
   }
 };
 
+// --- WORKBOOK ---
 export const previewTaxWorkbook = async (req, res) => {
   try {
     if (!req.file?.path) {
@@ -90,7 +142,6 @@ export const previewTaxWorkbook = async (req, res) => {
       .status(400)
       .json({ error: `Gagal membaca workbook pajak: ${error.message}` });
   } finally {
-    // Clean up the temp file regardless of success or failure
     if (req.file?.path) {
       await cleanupTempFile(req.file.path);
     }
@@ -112,48 +163,7 @@ export const confirmTaxWorkbookImport = async (req, res) => {
   }
 };
 
-export const assignTax = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { toUserId, reason } = req.body;
-
-    const updatedTax = await assignTaxTask(id, toUserId, req.user, reason);
-
-    res.status(200).json({
-      message: "PIC berhasil diperbarui!",
-      data: updatedTax,
-    });
-  } catch (error) {
-    res
-      .status(error.statusCode || 500)
-      .json({ error: `Gagal mengubah assignment: ${error.message}` });
-  }
-};
-
-export const bulkAssignClientTaxes = async (req, res) => {
-  try {
-    const { clientId } = req.params;
-    const { toUserId, reason } = req.body;
-
-    const result = await assignTaxTasksByClient(
-      clientId,
-      toUserId,
-      req.user,
-      reason,
-    );
-
-    res.status(200).json({
-      message: `Berhasil memperbarui PIC untuk ${result.count} tugas pajak!`,
-      data: result,
-    });
-  } catch (error) {
-    logger.error(error, "Error in bulkAssignClientTaxes");
-    res
-      .status(error.statusCode || 500)
-      .json({ error: `Gagal memperbarui PIC massal: ${error.message}` });
-  }
-};
-
+// --- OTHERS ---
 export const getTaxWorkload = async (req, res) => {
   try {
     const workload = await getWorkloadSummary();
@@ -167,7 +177,10 @@ export const getTaxWorkload = async (req, res) => {
 
 export const getTaxClients = async (req, res) => {
   try {
-    const result = await getClientTaxOverview({ ...req.query, currentUser: req.user });
+    const result = await getClientTaxOverview({
+      ...req.query,
+      currentUser: req.user,
+    });
     res.status(200).json(result);
   } catch (error) {
     res
