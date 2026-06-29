@@ -86,3 +86,18 @@ export const emitTodoUpdated = (todoData, { notifyUserIds = [] } = {}) => {
 
   logger.info({ todoId: todoData.id }, "📣 Emitted TODO_UPDATED event");
 };
+
+export const emitWorkloadUpdated = (userId) => {
+  if (!io) {
+    logger.warn("Socket Event Bus not initialized, skipping emit");
+    return;
+  }
+  
+  if (!userId) return;
+
+  const payload = { userId, timestamp: new Date().toISOString() };
+  io.to(`user_${userId}`).emit("WORKLOAD_UPDATED", payload);
+  io.to("admin_room").emit("WORKLOAD_UPDATED", payload);
+
+  logger.info({ userId }, "📣 Emitted WORKLOAD_UPDATED event");
+};

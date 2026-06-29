@@ -210,9 +210,8 @@ const ClientForm = ({ client, onSuccess, onClose, isAdmin }) => {
               { id: "DJP", label: "Profil DJP" },
               { id: "KRED_DJP", label: "Kredensial DJP" },
               { id: "KRED_EMAIL", label: "Kredensial Email" },
-              !isOP && { id: "KRED_LAIN", label: "Kredensial Lainnya" },
+              { id: "KRED_LAIN", label: "Kredensial Lainnya" },
             ]
-              .filter(Boolean)
               .map((tab) => (
                 <button
                   key={tab.id}
@@ -236,9 +235,8 @@ const ClientForm = ({ client, onSuccess, onClose, isAdmin }) => {
               { id: "DJP", label: "Profil DJP" },
               { id: "KRED_DJP", label: "Kredensial DJP" },
               { id: "KRED_EMAIL", label: "Kredensial Email" },
-              !isOP && { id: "KRED_LAIN", label: "Lainnya" },
+              { id: "KRED_LAIN", label: "Lainnya" },
             ]
-              .filter(Boolean)
               .map((tab) => (
                 <button
                   key={tab.id}
@@ -576,70 +574,93 @@ const ClientForm = ({ client, onSuccess, onClose, isAdmin }) => {
                 </div>
               )}
 
-              {/* TAB 5: KREDENSIAL LAINNYA (BADAN ONLY) */}
-              {activeTab === "KRED_LAIN" && !isOP && (
+              {/* TAB 5: KREDENSIAL LAINNYA */}
+              {activeTab === "KRED_LAIN" && (
                 <div className="space-y-8 duration-300 animate-in fade-in slide-in-from-right-4">
-                  <div className="space-y-4">
-                    <h4 className="text-sm font-bold tracking-wider uppercase text-slate-400">
-                      OSS
+                  {/* Info about dynamic credentials */}
+                  <div className="p-4 border border-blue-200 bg-blue-50 rounded-xl">
+                    <h4 className="text-sm font-bold tracking-wider uppercase text-blue-700 mb-2">
+                      ✨ Kredensial Dinamis
                     </h4>
-                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                      <InputField
-                        label="Username OSS"
-                        name="oss_username"
-                        value={formData.oss_username}
-                        onChange={handleChange}
-                        error={fieldErrors.oss_username?.[0]}
-                      />
-                      <PasswordField
-                        label="Password OSS"
-                        name="oss_password"
-                        value={formData.oss_password}
-                        onChange={handleChange}
-                      />
-                    </div>
+                    <p className="text-sm text-blue-800">
+                      {isEdit
+                        ? "Untuk menambahkan kredensial baru, simpan perubahan terlebih dahulu kemudian buka detail klien."
+                        : "Untuk menambahkan kredensial baru, simpan klien terlebih dahulu kemudian buka detail klien."}
+                    </p>
                   </div>
-                  <div className="space-y-4">
-                    <h4 className="text-sm font-bold tracking-wider uppercase text-slate-400">
-                      Accurate
-                    </h4>
-                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                      <InputField
-                        label="Email Accurate"
-                        name="accurate_email"
-                        type="email"
-                        value={formData.accurate_email}
-                        onChange={handleChange}
-                        error={fieldErrors.accurate_email?.[0]}
-                      />
-                      <PasswordField
-                        label="Password Accurate"
-                        name="accurate_password"
-                        value={formData.accurate_password}
-                        onChange={handleChange}
-                      />
+
+                  {/* Legacy fields (Data Lama) */}
+                  {!isOP && (
+                    <div className="space-y-6">
+                      <h4 className="text-sm font-bold tracking-wider uppercase text-slate-400">
+                        Data Lama (Kredensial Statis)
+                      </h4>
+
+                      <div className="space-y-4">
+                        <h5 className="text-xs font-bold tracking-wider uppercase text-slate-400">
+                          OSS
+                        </h5>
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <InputField
+                            label="Username OSS"
+                            name="oss_username"
+                            value={formData.oss_username}
+                            onChange={handleChange}
+                            error={fieldErrors.oss_username?.[0]}
+                          />
+                          <PasswordField
+                            label="Password OSS"
+                            name="oss_password"
+                            value={formData.oss_password}
+                            onChange={handleChange}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-4">
+                        <h5 className="text-xs font-bold tracking-wider uppercase text-slate-400">
+                          Accurate
+                        </h5>
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <InputField
+                            label="Email Accurate"
+                            name="accurate_email"
+                            type="email"
+                            value={formData.accurate_email}
+                            onChange={handleChange}
+                            error={fieldErrors.accurate_email?.[0]}
+                          />
+                          <PasswordField
+                            label="Password Accurate"
+                            name="accurate_password"
+                            value={formData.accurate_password}
+                            onChange={handleChange}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-4">
+                        <h5 className="text-xs font-bold tracking-wider uppercase text-slate-400">
+                          BPJS Kesehatan
+                        </h5>
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <InputField
+                            label="No. BPJS"
+                            name="bpjs_kes_number"
+                            value={formData.bpjs_kes_number}
+                            onChange={handleChange}
+                            error={fieldErrors.bpjs_kes_number?.[0]}
+                          />
+                          <PasswordField
+                            label="Password BPJS"
+                            name="bpjs_kes_password"
+                            value={formData.bpjs_kes_password}
+                            onChange={handleChange}
+                          />
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                  <div className="space-y-4">
-                    <h4 className="text-sm font-bold tracking-wider uppercase text-slate-400">
-                      BPJS Kesehatan
-                    </h4>
-                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                      <InputField
-                        label="No. BPJS"
-                        name="bpjs_kes_number"
-                        value={formData.bpjs_kes_number}
-                        onChange={handleChange}
-                        error={fieldErrors.bpjs_kes_number?.[0]}
-                      />
-                      <PasswordField
-                        label="Password BPJS"
-                        name="bpjs_kes_password"
-                        value={formData.bpjs_kes_password}
-                        onChange={handleChange}
-                      />
-                    </div>
-                  </div>
+                  )}
                 </div>
               )}
             </form>

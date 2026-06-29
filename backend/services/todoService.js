@@ -4,7 +4,7 @@ import { logActivity } from "./activityService.js";
 import { runInTransaction } from "../utils/transactionHelper.js";
 import { ROLES } from "../constants/roles.js";
 import { validateTodoTransition } from "../constants/todoStatus.js";
-import { emitTodoUpdated } from "./socketEventBus.js";
+import { emitTodoUpdated, emitWorkloadUpdated } from "./socketEventBus.js";
 
 /**
  * List todos with pagination and filtering
@@ -70,7 +70,10 @@ export const createTodoTask = async (payload, actor) => {
       actorId: actor.id,
       targetType: "TODO",
       targetId: todo.id,
-      metadata: payload,
+      metadata: {
+        ...payload,
+        ...(todo.status === "APPROVED" ? { picIdAtCompletion: todo.pic_id } : {})
+      },
       legacy: { recordType: "TODO", recordId: todo.id, newStatus: todo.status },
       transaction,
     });
@@ -124,7 +127,11 @@ export const updateTodoTaskStatus = async (id, newStatus, actor) => {
       actorId: actor.id,
       targetType: "TODO",
       targetId: todo.id,
-      metadata: { oldStatus, newStatus },
+      metadata: { 
+        oldStatus, 
+        newStatus,
+        ...(newStatus === "APPROVED" ? { picIdAtCompletion: todo.pic_id } : {})
+      },
       legacy: {
         recordType: "TODO",
         recordId: todo.id,
@@ -135,6 +142,9 @@ export const updateTodoTaskStatus = async (id, newStatus, actor) => {
     });
 
     emitTodoUpdated(todo);
+    if (newStatus === "APPROVED" || oldStatus === "APPROVED") {
+      emitWorkloadUpdated(todo.pic_id);
+    }
 
     return todo;
   });
@@ -195,6 +205,8 @@ export const assignTodoTask = async (id, toUserId, actor, reason) => {
     });
 
     emitTodoUpdated(todo, { notifyUserIds: [fromUserId] });
+    emitWorkloadUpdated(fromUserId);
+    emitWorkloadUpdated(toUserId);
 
     return todo;
   });

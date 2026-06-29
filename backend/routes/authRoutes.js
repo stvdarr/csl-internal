@@ -6,6 +6,7 @@ import {
   logout,
   getMe,
   getStaffList,
+  getUserList,
 } from "../controllers/authController.js";
 import { verifyToken } from "../middleware/authCheck.js";
 import { requireAdmin } from "../middleware/roleCheck.js";
@@ -24,6 +25,7 @@ const loginLimiter = rateLimit({
 router.get("/me", verifyToken, getMe);
 router.post("/logout", verifyToken, logout);
 router.get("/staff", verifyToken, requireAdmin, getStaffList);
+router.get("/user", verifyToken, requireAdmin, getUserList);
 router.post(
   "/register",
   verifyToken,

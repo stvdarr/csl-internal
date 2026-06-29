@@ -15,7 +15,7 @@ const EnvSchema = z.object({
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(15 * 60 * 1000), // 15 minutes
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(300),
   SENTRY_DSN: z.string().url().optional(),
-  CORS_ORIGIN: z.string().default("http://localhost:5173,http://192.168.0.120:5173"),
+  CORS_ORIGIN: z.string().default("http://localhost:5173,http://192.168.0.120:5173,https://csl-internal.netlify.app"),
   LOG_LEVEL: z.enum(["trace", "debug", "info", "warn", "error", "fatal"]).default("info"),
   SEED_ADMIN_NAME: z.string().optional(),
   SEED_ADMIN_EMAIL: z.string().email().optional(),

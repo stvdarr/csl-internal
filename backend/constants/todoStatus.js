@@ -24,7 +24,7 @@ export const validateTodoTransition = (currentStatus, newStatus, role = ROLES.ST
   }
 
   const allowed = TODO_VALID_TRANSITIONS[currentStatus];
-  if (!allowed || !allowed.includes(newStatus)) {
+  if (!allowed?.includes(newStatus)) {
     const error = new Error(
       `Transisi status tidak valid: ${currentStatus} → ${newStatus}`,
     );

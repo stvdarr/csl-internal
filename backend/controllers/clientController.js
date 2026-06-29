@@ -12,7 +12,6 @@
  */
 
 import logger from "../utils/logger.js";
-import { cleanupTempFile } from "../middleware/uploadWorkbook.js";
 import {
   listClientProfiles,
   getClientProfile,
@@ -24,6 +23,10 @@ import {
   addFamilyMember,
   updateFamilyMember,
   removeFamilyMember,
+  addCredential,
+  updateCredential,
+  removeCredential,
+  deleteClientProfile,
 } from "../services/clientService.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -33,7 +36,17 @@ import {
 
 export const getClients = async (req, res) => {
   try {
-    const result = await listClientProfiles(req.query);
+    const isAdmin = req.user?.role === "Admin";
+    // include_credentials: Admin-only — Staff always get credentials stripped
+    const include_credentials = isAdmin && req.query.include_credentials === "true";
+    // no_limit: returns all rows without pagination (for matrix view)
+    const no_limit = req.query.no_limit === "true";
+
+    const result = await listClientProfiles({
+      ...req.query,
+      include_credentials,
+      no_limit,
+    });
     return res.status(200).json(result);
   } catch (e) {
     logger.error({ err: e }, "getClients failed");
@@ -151,13 +164,11 @@ export const exportClients = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const importClients = async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: "File tidak ditemukan" });
-  }
-
   try {
-    // Change A: pass req.file.path — multer.diskStorage does not populate req.file.buffer
-    const result = await importClientProfiles(req.file.path, req.user);
+    if (!req.file) {
+      return res.status(400).json({ error: "File tidak ditemukan" });
+    }
+    const result = await importClientProfiles(req.file.buffer, req.user);
     return res.status(201).json({
       message: `Import selesai: ${result.success} klien berhasil, ${result.failed} baris gagal.`,
       data:    result,
@@ -165,9 +176,6 @@ export const importClients = async (req, res) => {
   } catch (e) {
     logger.error({ err: e }, "importClients failed");
     return res.status(e.statusCode || 500).json({ error: e.message });
-  } finally {
-    // Change C: always clean up the temp file to prevent unbounded disk growth
-    await cleanupTempFile(req.file.path);
   }
 };
 
@@ -238,6 +246,77 @@ export const deleteMember = async (req, res) => {
     return res.status(200).json({ message: "Anggota keluarga berhasil dihapus" });
   } catch (e) {
     logger.error({ err: e }, "deleteMember failed");
+    return res.status(e.statusCode || 500).json({ error: e.message });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/clients/:id/credentials
+// PR: Admin only
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const addClientCredential = async (req, res) => {
+  try {
+    const credential = await addCredential(req.params.id, req.body, req.user);
+    return res.status(201).json({
+      message: "Kredensial berhasil ditambahkan",
+      data: credential,
+    });
+  } catch (e) {
+    logger.error({ err: e }, "addClientCredential failed");
+    return res.status(e.statusCode || 500).json({ error: e.message });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PUT /api/clients/:id/credentials/:credId
+// PR: Admin only
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const updateClientCredential = async (req, res) => {
+  try {
+    const credential = await updateCredential(
+      req.params.id,
+      req.params.credId,
+      req.body,
+      req.user
+    );
+    return res.status(200).json({
+      message: "Kredensial berhasil diperbarui",
+      data: credential,
+    });
+  } catch (e) {
+    logger.error({ err: e }, "updateClientCredential failed");
+    return res.status(e.statusCode || 500).json({ error: e.message });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DELETE /api/clients/:id/credentials/:credId
+// PR: Admin only
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const deleteClientCredential = async (req, res) => {
+  try {
+    await removeCredential(req.params.id, req.params.credId, req.user);
+    return res.status(200).json({ message: "Kredensial berhasil dihapus" });
+  } catch (e) {
+    logger.error({ err: e }, "deleteClientCredential failed");
+    return res.status(e.statusCode || 500).json({ error: e.message });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DELETE /api/clients/:id
+// PR-xx: Admin + Staff
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const deleteClient = async (req, res) => {
+  try {
+    const result = await deleteClientProfile(req.params.id, req.user);
+    return res.status(200).json(result);
+  } catch (e) {
+    logger.error({ err: e }, "deleteClient failed");
     return res.status(e.statusCode || 500).json({ error: e.message });
   }
 };

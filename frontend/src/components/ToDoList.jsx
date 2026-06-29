@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState, useContext, useRef } from "react";
+import { useCallback, useEffect, useState, useContext, useRef, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import api from "../services/api";
 import { socket } from "../services/socket";
 import { AuthContext } from "../context/AuthContext";
@@ -42,8 +43,29 @@ const ToDoList = () => {
     }
   }, [isAdmin]);
 
+  const { data: workloadList = [] } = useQuery({
+    queryKey: ["workload-current"],
+    queryFn: async () => {
+      const { data } = await api.get("/workload/current");
+      return data.data;
+    },
+    enabled: isAdmin,
+  });
+
+  const staffWithWorkload = useMemo(() => {
+    return staffList.map((staff) => {
+      const w = workloadList.find((w) => w.user && w.user.id === staff.id);
+      return {
+        ...staff,
+        totalActive: w ? w.totalActive : 0,
+      };
+    });
+  }, [staffList, workloadList]);
+
   const fetchTodosRef = useRef(fetchTodos);
-  fetchTodosRef.current = fetchTodos;
+  useEffect(() => {
+    fetchTodosRef.current = fetchTodos;
+  }, [fetchTodos]);
 
   useEffect(() => {
     fetchTodos();
@@ -219,8 +241,8 @@ const ToDoList = () => {
                 className="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 outline-none"
               >
                 <option value="">Pilih PIC</option>
-                {staffList.map((staff) => (
-                  <option key={staff.id} value={staff.id}>{staff.name} ({staff.role})</option>
+                {staffWithWorkload.map((staff) => (
+                  <option key={staff.id} value={staff.id}>{staff.name} ({staff.role}) ({staff.totalActive} Task)</option>
                 ))}
               </select>
             </div>
@@ -279,8 +301,8 @@ const ToDoList = () => {
                         className="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded focus:ring-blue-500 focus:border-blue-500 p-1.5"
                       >
                         <option value="" disabled>Pilih PIC</option>
-                        {staffList.map((staff) => (
-                          <option key={staff.id} value={staff.id}>{staff.name} ({staff.role})</option>
+                        {staffWithWorkload.map((staff) => (
+                          <option key={staff.id} value={staff.id}>{staff.name} ({staff.role}) ({staff.totalActive} Task)</option>
                         ))}
                       </select>
                     ) : (

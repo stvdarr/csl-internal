@@ -5,7 +5,8 @@ import TaxTracker from "../components/Tax/TaxTracker";
 import ToDoList from "../components/ToDoList";
 import HistoryLogViewer from "../components/HistoryLogViewer";
 import ClientManager from "../components/Client/ClientManager";
-import { LogOut, LayoutDashboard, CheckSquare, History, Users, UserPlus, Eye, EyeOff, AlertCircle, Loader2, CheckCircle2, Shield } from "lucide-react";
+import WorkloadDashboard from "../components/Workload/WorkloadDashboard";
+import { LogOut, LayoutDashboard, CheckSquare, History, Users, UserPlus, Eye, EyeOff, AlertCircle, Loader2, CheckCircle2, Shield, Activity } from "lucide-react";
 import api from "../services/api";
 import { ROLES } from "../constants/roles";
 
@@ -32,6 +33,7 @@ const Dashboard = () => {
   const isAdmin = user?.role === ROLES.ADMIN;
 
   const tabs = [
+    { id: "WORKLOAD", label: "Workload", icon: Activity },
     { id: "CLIENT", label: "Data Klien", icon: Users },
     { id: "TAX", label: "Tracking Pajak", icon: LayoutDashboard },
     { id: "TODO", label: "To-Do List", icon: CheckSquare },
@@ -190,6 +192,7 @@ const Dashboard = () => {
               exit={{ opacity: 0, y: -15 }}
               transition={{ duration: 0.2, ease: "easeOut" }}
             >
+              {activeTab === "WORKLOAD" && <WorkloadDashboard />}
               {activeTab === "CLIENT" && <ClientManager />}
               {activeTab === "TAX" && <TaxTracker />}
               {activeTab === "TODO" && <ToDoList />}

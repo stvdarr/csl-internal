@@ -11,6 +11,7 @@ import {
   getClientTaxOverview,
   resetAllTaxData,
 } from "../services/taxService.js";
+import { getTaxReminders as getTaxRemindersService } from "../services/taxReminderService.js";
 import { parseTaxWorkbookFile } from "../services/taxWorkbookParser.js";
 import { cleanupTempFile } from "../middleware/uploadWorkbook.js";
 import logger from "../utils/logger.js";
@@ -57,9 +58,21 @@ export const getObligations = async (req, res) => {
     res.status(200).json({ data: obligations });
   } catch (error) {
     logger.error(error, "Error in getObligations");
-    res.status(500).json({ error: "Gagal mengambil obligasi pajak" });
+    res.status(500).json({ error: "Gagal mengambil overview pajak klien" });
   }
 };
+
+export const getTaxReminders = async (req, res) => {
+  try {
+    const daysAhead = parseInt(req.query.daysAhead) || 7;
+    const reminders = await getTaxRemindersService(req.user, daysAhead);
+    res.status(200).json({ data: reminders });
+  } catch (error) {
+    logger.error(error, "Error in getTaxReminders");
+    res.status(500).json({ error: "Gagal mengambil data reminder pajak" });
+  }
+};
+
 
 export const assignObligation = async (req, res) => {
   try {

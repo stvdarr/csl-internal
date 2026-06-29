@@ -13,6 +13,7 @@ import {
   createObligation,
   getObligations,
   assignObligation,
+  getTaxReminders,
 } from "../controllers/taxController.js";
 import { verifyToken } from "../middleware/authCheck.js";
 import { checkApprovalAccess, requireAdmin } from "../middleware/roleCheck.js";
@@ -27,6 +28,7 @@ import {
   createObligationSchema,
   listObligationsSchema,
   assignObligationSchema,
+  getTaxRemindersSchema,
 } from "../validators/taxSchemas.js";
 import {
   uploadWorkbook,
@@ -75,6 +77,7 @@ router.put(
 );
 
 // --- OTHER ROUTES ---
+router.get("/reminders", validateRequest(getTaxRemindersSchema), getTaxReminders);
 router.get("/clients", validateRequest(listClientsSchema), getTaxClients);
 router.get("/workload", getTaxWorkload);
 router.delete(

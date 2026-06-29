@@ -17,7 +17,7 @@ import { logActivity, logActivityBatch } from "./activityService.js";
 import { normalizeName } from "../utils/normalize.js";
 import { runInTransaction } from "../utils/transactionHelper.js";
 import logger from "../utils/logger.js";
-import { emitTaxUpdated } from "./socketEventBus.js";
+import { emitTaxUpdated, emitWorkloadUpdated } from "./socketEventBus.js";
 
 // --- HELPERS ---
 const obligationInclude = [
@@ -194,6 +194,9 @@ export const assignTaxObligation = async (obligationId, toUserId, actor, reason)
     for (const period of periods) {
       emitTaxUpdated(period);
     }
+    
+    emitWorkloadUpdated(fromUserId);
+    emitWorkloadUpdated(toUserId);
 
     return TaxObligation.findByPk(obligation.id, {
       include: obligationInclude,
@@ -303,6 +306,7 @@ export const createTaxTask = async (payload, actor) => {
         clientName: client.name,
         taxType: obligation.taxType,
         period: normalizedPeriod,
+        ...(normalizeTaskStatus(payload.status || "NOT_STARTED") === "COMPLETED" ? { picIdAtCompletion: obligation.pic_id } : {})
       },
       transaction,
     });
@@ -360,7 +364,11 @@ export const updateTaxTaskStatus = async (periodId, newStatus, actor) => {
       actorId: actor.id,
       targetType: "TAX",
       targetId: period.id,
-      metadata: { oldStatus, newStatus: normalizedStatus },
+      metadata: { 
+        oldStatus, 
+        newStatus: normalizedStatus,
+        ...(normalizedStatus === "COMPLETED" ? { picIdAtCompletion: period.TaxObligation.pic_id } : {})
+      },
       transaction,
     });
 
@@ -370,6 +378,9 @@ export const updateTaxTaskStatus = async (periodId, newStatus, actor) => {
     });
 
     emitTaxUpdated(updatedPeriod);
+    if (normalizedStatus === "COMPLETED" || oldStatus === "COMPLETED") {
+      emitWorkloadUpdated(period.TaxObligation.pic_id);
+    }
     return updatedPeriod;
   });
 };
@@ -491,7 +502,7 @@ export const importTaxWorkbookRows = async (rows, actor) => {
             });
 
             if (!existingPeriod) {
-              await TaxPeriod.create(
+              const newPeriod = await TaxPeriod.create(
                 {
                   obligationId: obligation.id,
                   period: normalizedPeriod,
@@ -501,15 +512,41 @@ export const importTaxWorkbookRows = async (rows, actor) => {
                 { transaction },
               );
               chunkStats.created++;
+              historyLogs.push({
+                actionType: "CREATED_TASK",
+                actorId: actor.id,
+                targetType: "TAX",
+                targetId: newPeriod.id,
+                metadata: {
+                  clientId: client.id,
+                  clientName: client.name,
+                  taxType: obligation.taxType,
+                  period: normalizedPeriod,
+                  ...(row.status === "COMPLETED" ? { picIdAtCompletion: obligation.pic_id } : {})
+                }
+              });
             } else {
               const hasStatusChange = existingPeriod.status !== row.status;
               const hasAmountChange = Number(existingPeriod.amount) !== Number(row.amount || 0);
 
               if (hasStatusChange || hasAmountChange) {
+                const oldStatus = existingPeriod.status;
                 existingPeriod.status = row.status;
                 existingPeriod.amount = row.amount || 0;
                 await existingPeriod.save({ transaction });
                 chunkStats.updated++;
+                
+                historyLogs.push({
+                  actionType: "UPDATED_STATUS",
+                  actorId: actor.id,
+                  targetType: "TAX",
+                  targetId: existingPeriod.id,
+                  metadata: {
+                    oldStatus,
+                    newStatus: row.status,
+                    ...(row.status === "COMPLETED" ? { picIdAtCompletion: obligation.pic_id } : {})
+                  }
+                });
               } else {
                 chunkStats.unchanged++;
               }

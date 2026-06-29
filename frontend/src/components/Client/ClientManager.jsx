@@ -1,10 +1,11 @@
 import { useState, useContext } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Search, Plus, Download, FileSpreadsheet } from "lucide-react";
+import { Search, Plus, Download, FileSpreadsheet, List, Grid } from "lucide-react";
 import api from "../../services/api";
 import { AuthContext } from "../../context/AuthContext";
 import { ROLES } from "../../constants/roles";
 import ClientList from "./ClientList";
+import ClientMatrixView from "./ClientMatrixView";
 import ClientForm from "./ClientForm";
 import ClientDetailModal from "./ClientDetailModal";
 
@@ -20,6 +21,7 @@ const ClientManager = () => {
   const [showForm, setShowForm] = useState(false);
   const [editingClient, setEditingClient] = useState(null);
   const [viewingClient, setViewingClient] = useState(null);
+  const [viewMode, setViewMode] = useState("LIST");
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ["clients", { search, clientType, statusFilter, page }],
@@ -85,6 +87,21 @@ const ClientManager = () => {
     setViewingClient(client.id);
   };
 
+  const handleDelete = async (clientId) => {
+    if (!window.confirm("Yakin ingin menghapus klien ini? Data tidak dapat dikembalikan.")) {
+      return;
+    }
+
+    try {
+      await api.delete(`/clients/${clientId}`);
+      refetch();
+      alert("Klien berhasil dihapus");
+    } catch (error) {
+      console.error("Delete failed", error);
+      alert("Gagal menghapus klien: " + (error.response?.data?.error || error.message));
+    }
+  };
+
   const handleFormSuccess = () => {
     setShowForm(false);
     refetch();
@@ -93,42 +110,40 @@ const ClientManager = () => {
   return (
     <div className="space-y-6">
       {/* Header Area */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+      <div className="flex flex-col gap-4 justify-between items-start sm:flex-row sm:items-center">
         <div>
           <h2 className="text-2xl font-bold text-slate-900">Data Klien</h2>
           <p className="text-sm text-slate-500">
             Manajemen profil, kredensial, dan tanggungan klien
           </p>
         </div>
-        <div className="flex items-center gap-3 w-full sm:w-auto">
+        <div className="flex gap-3 items-center w-full sm:w-auto">
           <button
             onClick={handleExport}
-            className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-700 text-sm font-semibold rounded-xl hover:bg-slate-50 transition-colors shadow-sm"
+            className="flex flex-1 gap-2 justify-center items-center px-4 py-2 text-sm font-semibold bg-white rounded-xl border shadow-sm transition-colors sm:flex-none border-slate-200 text-slate-700 hover:bg-slate-50"
           >
             <Download className="w-4 h-4" />
             <span className="hidden sm:inline">Export Excel</span>
           </button>
 
-          {isAdmin && (
-            <button
-              onClick={handleCreateNew}
-              className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-xl hover:bg-blue-700 transition-colors shadow-sm shadow-blue-600/20"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Tambah Klien</span>
-            </button>
-          )}
+          <button
+            onClick={handleCreateNew}
+            className="flex flex-1 gap-2 justify-center items-center px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-xl shadow-sm transition-colors sm:flex-none hover:bg-blue-700 shadow-blue-600/20"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Tambah Klien</span>
+          </button>
         </div>
       </div>
 
       {/* Filters Area */}
-      <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex flex-col lg:flex-row gap-4 items-end">
-        <form onSubmit={handleSearch} className="flex-1 w-full relative">
+      <div className="flex flex-col gap-4 items-end p-4 bg-white rounded-2xl border shadow-sm border-slate-200 lg:flex-row">
+        <form onSubmit={handleSearch} className="relative flex-1 w-full">
           <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">
             Pencarian
           </label>
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <Search className="absolute left-3 top-1/2 w-4 h-4 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
               placeholder="Cari nama, NPWP, NIK..."
@@ -174,20 +189,50 @@ const ClientManager = () => {
             <option value="INACTIVE">Non-Aktif</option>
           </select>
         </div>
+
+        <div className="flex p-1 border rounded-xl bg-slate-100 border-slate-200">
+          <button
+            onClick={() => setViewMode("LIST")}
+            className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold rounded-md transition-all ${
+              viewMode === "LIST"
+                ? "bg-white shadow-sm text-blue-700"
+                : "text-slate-500 hover:text-slate-700"
+            }`}
+          >
+            <List className="w-4 h-4" />
+            <span>List</span>
+          </button>
+          <button
+            onClick={() => setViewMode("MATRIX")}
+            className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold rounded-md transition-all ${
+              viewMode === "MATRIX"
+                ? "bg-blue-600 shadow-sm text-white"
+                : "text-slate-500 hover:text-slate-700"
+            }`}
+          >
+            <Grid className="w-4 h-4" />
+            <span>Matrix</span>
+          </button>
+        </div>
       </div>
 
-      {/* Main List */}
-      <ClientList
-        clients={data?.data || []}
-        isLoading={isLoading}
-        onView={handleView}
-        onEdit={handleEdit}
-        isAdmin={isAdmin}
-      />
+      {/* Main View */}
+      {viewMode === "MATRIX" ? (
+        <ClientMatrixView clients={data?.data || []} />
+      ) : (
+        <ClientList
+          clients={data?.data || []}
+          isLoading={isLoading}
+          onView={handleView}
+          onEdit={handleEdit}
+          onDelete={handleDelete}
+          isAdmin={isAdmin}
+        />
+      )}
 
       {/* Pagination */}
       {data?.totalPages > 1 && (
-        <div className="flex items-center justify-between px-4 py-3 bg-white rounded-xl border border-slate-200 shadow-sm">
+        <div className="flex justify-between items-center px-4 py-3 bg-white rounded-xl border shadow-sm border-slate-200">
           <div className="text-sm text-slate-500">
             Halaman <span className="font-semibold text-slate-900">{data.page}</span> dari{" "}
             <span className="font-semibold text-slate-900">{data.totalPages}</span>
@@ -230,6 +275,7 @@ const ClientManager = () => {
             setViewingClient(null);
             handleEdit(c);
           }}
+          onDelete={handleDelete}
           isAdmin={isAdmin}
           onRefresh={refetch}
         />

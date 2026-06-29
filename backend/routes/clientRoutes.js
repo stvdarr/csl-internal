@@ -18,7 +18,7 @@
 
 import express from "express";
 import { verifyToken }      from "../middleware/authCheck.js";
-import { requireAdmin }     from "../middleware/roleCheck.js";
+import { requireAdmin, requireAdminOrStaff }     from "../middleware/roleCheck.js";
 import { validateRequest }  from "../middleware/validateRequest.js";
 import { uploadWorkbook }   from "../middleware/uploadWorkbook.js";
 import {
@@ -33,6 +33,10 @@ import {
   addMember,
   updateMember,
   deleteMember,
+  addClientCredential,
+  updateClientCredential,
+  deleteClientCredential,
+  deleteClient,
 } from "../controllers/clientController.js";
 import {
   listClientProfilesSchema,
@@ -44,6 +48,10 @@ import {
   addFamilyMemberSchema,
   updateFamilyMemberSchema,
   deleteFamilyMemberSchema,
+  addCredentialSchema,
+  updateCredentialSchema,
+  deleteCredentialSchema,
+  deleteClientSchema,
 } from "../validators/clientSchemas.js";
 
 const router = express.Router();
@@ -70,10 +78,10 @@ router.get(
 );
 
 // POST /api/clients
-// PR-03: Admin only
+// PR-03: Admin + Staff
 router.post(
   "/",
-  requireAdmin,
+  requireAdminOrStaff,
   validateRequest(createClientSchema),
   createClient
 );
@@ -96,10 +104,10 @@ router.get(
 );
 
 // PUT /api/clients/:id
-// PR-04: Admin only
+// PR-04: Admin + Staff
 router.put(
   "/:id",
-  requireAdmin,
+  requireAdminOrStaff,
   validateRequest(updateClientSchema),
   updateClient
 );
@@ -113,8 +121,17 @@ router.patch(
   updateClientStatus
 );
 
-// ─── Family Member Sub-routes ─────────────────────────────────────────────────
+// DELETE /api/clients/:id
+// PR-xx: Admin + Staff
+router.delete(
+  "/:id",
+  requireAdminOrStaff,
+  validateRequest(deleteClientSchema),
+  deleteClient
+);
 
+// ─── Family Member Sub-routes ─────────────────────────────────────────────────
+  
 // GET /api/clients/:id/family
 // PR-08: Admin + Staff
 router.get(
@@ -148,6 +165,35 @@ router.delete(
   requireAdmin,
   validateRequest(deleteFamilyMemberSchema),
   deleteMember
+);
+
+// ─── Credential Sub-routes ───────────────────────────────────────────────────
+
+// POST /api/clients/:id/credentials
+// PR: Admin + Staff
+router.post(
+  "/:id/credentials",
+  requireAdminOrStaff,
+  validateRequest(addCredentialSchema),
+  addClientCredential
+);
+
+// PUT /api/clients/:id/credentials/:credId
+// PR: Admin + Staff
+router.put(
+  "/:id/credentials/:credId",
+  requireAdminOrStaff,
+  validateRequest(updateCredentialSchema),
+  updateClientCredential
+);
+
+// DELETE /api/clients/:id/credentials/:credId
+// PR: Admin + Staff
+router.delete(
+  "/:id/credentials/:credId",
+  requireAdminOrStaff,
+  validateRequest(deleteCredentialSchema),
+  deleteClientCredential
 );
 
 export default router;

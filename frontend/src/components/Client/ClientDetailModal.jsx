@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { X, Building2, User2, MapPin, Phone, Mail, FileText, CreditCard, Clock, Calendar, Edit2, ShieldAlert, ShieldCheck } from "lucide-react";
+import { X, Building2, User2, MapPin, Phone, Mail, FileText, CreditCard, Clock, Calendar, Edit2, ShieldAlert, ShieldCheck, Trash2 } from "lucide-react";
 import api from "../../services/api";
 import ClientFamilyTable from "./ClientFamilyTable";
+import ClientCredentialManager from "./ClientCredentialManager";
 import { useState } from "react";
 
 const PasswordField = ({ label, value }) => {
@@ -54,13 +55,27 @@ const Field = ({ label, value, isMonospace }) => (
   </div>
 );
 
-const ClientDetailModal = ({ clientId, onClose, onEdit, isAdmin, onRefresh }) => {
+const ClientDetailModal = ({ clientId, onClose, onEdit, onDelete, isAdmin, onRefresh }) => {
   const { data: client, isLoading, refetch } = useQuery({
     queryKey: ["client", clientId],
     queryFn: () => api.get(`/clients/${clientId}`).then((res) => res.data.data),
   });
 
   const [isChangingStatus, setIsChangingStatus] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const handleDelete = async () => {
+    if (!onDelete) return;
+    if (!window.confirm("Yakin ingin menghapus klien ini? Data tidak dapat dikembalikan.")) return;
+
+    setIsDeleting(true);
+    try {
+      await onDelete(clientId);
+      onClose();
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   const handleToggleStatus = async () => {
     if (!isAdmin) return;
@@ -125,8 +140,8 @@ const ClientDetailModal = ({ clientId, onClose, onEdit, isAdmin, onRefresh }) =>
               </div>
             </div>
 
-            {isAdmin && (
-              <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2">
+              {isAdmin && (
                 <button
                   onClick={handleToggleStatus}
                   disabled={isChangingStatus}
@@ -139,15 +154,25 @@ const ClientDetailModal = ({ clientId, onClose, onEdit, isAdmin, onRefresh }) =>
                 >
                   {isActive ? <ShieldAlert className="w-5 h-5" /> : <ShieldCheck className="w-5 h-5" />}
                 </button>
+              )}
+              {onDelete && (
                 <button
-                  onClick={() => onEdit(client)}
-                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-xl hover:bg-blue-700 transition-colors shadow-sm"
+                  onClick={handleDelete}
+                  disabled={isDeleting}
+                  className="p-2 text-red-600 hover:bg-red-50 border border-red-200 rounded-lg transition-colors disabled:opacity-50 bg-white"
+                  title="Hapus Klien"
                 >
-                  <Edit2 className="w-4 h-4" />
-                  Edit
+                  <Trash2 className="w-5 h-5" />
                 </button>
-              </div>
-            )}
+              )}
+              <button
+                onClick={() => onEdit(client)}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-xl hover:bg-blue-700 transition-colors shadow-sm"
+              >
+                <Edit2 className="w-4 h-4" />
+                Edit
+              </button>
+            </div>
           </div>
         </div>
 
@@ -201,8 +226,17 @@ const ClientDetailModal = ({ clientId, onClose, onEdit, isAdmin, onRefresh }) =>
             </div>
           </Section>
 
-          {!isOP && (
-            <Section title="Kredensial Lainnya (Badan)" icon={Building2}>
+          {/* Dynamic Credentials */}
+          <ClientCredentialManager
+            clientId={client.id}
+            credentials={client.Credentials}
+            isAdmin={isAdmin}
+            onRefresh={refetch}
+          />
+
+          {/* Legacy Credentials (Data Lama) */}
+          {(client.oss_username || client.oss_password || client.accurate_email || client.accurate_password || client.bpjs_kes_number || client.bpjs_kes_password) && (
+            <Section title="Kredensial Lainnya (Data Lama)" icon={Building2}>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2">
                 <Field label="Username OSS" value={client.oss_username} />
                 <PasswordField label="Password OSS" value={client.oss_password} />

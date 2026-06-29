@@ -4,6 +4,7 @@ import User from "./User.js";
 import Client from "./Client.js";
 import ClientProfile from "./ClientProfile.js";
 import ClientFamilyMember from "./ClientFamilyMember.js";
+import ClientCredential from "./ClientCredential.js";
 import TaxObligation from "./TaxObligation.js";
 import TaxPeriod from "./TaxPeriod.js";
 import ToDo from "./ToDo.js";
@@ -31,6 +32,10 @@ ClientProfile.belongsTo(Client, { foreignKey: "client_id" });
 ClientProfile.hasMany(ClientFamilyMember, { as: "FamilyMembers", foreignKey: "client_profile_id" });
 ClientFamilyMember.belongsTo(ClientProfile, { foreignKey: "client_profile_id" });
 
+// Credentials cascade-delete when profile is deleted
+ClientProfile.hasMany(ClientCredential, { as: "Credentials", foreignKey: "client_profile_id" });
+ClientCredential.belongsTo(ClientProfile, { foreignKey: "client_profile_id" });
+
 // Track which User created / last updated each profile
 User.hasMany(ClientProfile, { as: "CreatedProfiles", foreignKey: "created_by" });
 User.hasMany(ClientProfile, { as: "UpdatedProfiles", foreignKey: "updated_by" });
@@ -47,4 +52,4 @@ TaxObligation.belongsTo(User, { foreignKey: "pic_id" });
 TaxObligation.hasMany(TaxPeriod, { foreignKey: "obligationId", onDelete: "CASCADE" });
 TaxPeriod.belongsTo(TaxObligation, { foreignKey: "obligationId" });
 
-export { sequelize, User, Client, ClientProfile, ClientFamilyMember, TaxObligation, TaxPeriod, ToDo, HistoryLog, TaskAssignment };
+export { sequelize, User, Client, ClientProfile, ClientFamilyMember, ClientCredential, TaxObligation, TaxPeriod, ToDo, HistoryLog, TaskAssignment };

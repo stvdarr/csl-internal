@@ -20,7 +20,7 @@ import todoRoutes from "./routes/todoRoutes.js";
 import historyRoutes from "./routes/historyRoutes.js";
 import healthRoutes from "./routes/healthRoutes.js";
 import clientRoutes from "./routes/clientRoutes.js";
-
+import workloadRoutes from "./routes/workloadRoutes.js";
 import { verifyToken } from "./middleware/authCheck.js";
 import { requireAdmin } from "./middleware/roleCheck.js";
 import { initializeSocketEventBus } from "./services/socketEventBus.js";
@@ -141,6 +141,7 @@ app.use("/api/tax", taxRoutes);
 app.use("/api/todo", todoRoutes);
 app.use("/api/history", historyRoutes);
 app.use("/api/clients", clientRoutes);
+app.use("/api/workload", workloadRoutes);
 
 app.get("/metrics", verifyToken, requireAdmin, async (req, res) => {
   res.set("Content-Type", register.contentType);

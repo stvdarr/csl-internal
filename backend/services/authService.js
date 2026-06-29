@@ -81,3 +81,11 @@ export const listAllStaff = async () => {
     order: [["name", "ASC"]],
   });
 };
+
+export const listAllUsers = async () => {
+  return User.findAll({
+    attributes: ["id", "name", "email"],
+    order: [["name", "ASC"]],
+  });
+};
+

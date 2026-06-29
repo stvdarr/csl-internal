@@ -53,7 +53,7 @@ export const validateStateTransition = (currentStatus, newStatus, role = "User")
   if (role === "Admin" && newStatus === "NOT_STARTED") return true; // Admin reset
   
   const allowed = VALID_TRANSITIONS[currentStatus];
-  if (!allowed || !allowed.includes(newStatus)) {
+  if (!allowed?.includes(newStatus)) {
     const error = new Error(`Invalid status transition from ${currentStatus} to ${newStatus}`);
     error.statusCode = 400;
     throw error;

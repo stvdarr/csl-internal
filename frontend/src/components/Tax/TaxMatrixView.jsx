@@ -1,22 +1,26 @@
-import { useEffect, useState, useMemo, useContext } from "react";
+import { useEffect, useState, useMemo, useContext, useRef } from "react";
 import {
   STATUS_HOTKEYS,
   STATUS_LABELS,
   VALID_TRANSITIONS,
 } from "../../constants/taskStatus";
 import { AuthContext } from "../../context/AuthContext";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import api from "../../services/api";
 import {
-  User as UserIcon,
-  Loader2,
-  Check,
-  X,
   LayoutDashboard,
 } from "lucide-react";
 import ClientTaxOverviewModal from "./ClientTaxOverviewModal";
 
-const TaxMatrixView = ({ taxes, obligations, activeTab, onStatusChange }) => {
+const TaxMatrixView = ({
+  taxes,
+  obligations,
+  activeTab,
+  selectedYear,
+  onStatusChange,
+  highlightedCell,
+  clearHighlightedCell,
+}) => {
   const { user: currentUser } = useContext(AuthContext);
   const isAdmin = currentUser?.role === "Admin";
   const queryClient = useQueryClient();
@@ -24,74 +28,41 @@ const TaxMatrixView = ({ taxes, obligations, activeTab, onStatusChange }) => {
   const [activeCell, setActiveCell] = useState({ row: 0, col: 0 });
   const [editingPic, setEditingPic] = useState(null); // { obligationId }
   const [overviewClient, setOverviewClient] = useState(null); // { clientId, clientName }
+  const cellRefs = useRef({});
+  const picDropdownRef = useRef(null);
 
-  // Fetch staff list for dropdown (only if admin)
-  const { data: staff = [] } = useQuery({
-    queryKey: ["staff"],
+  // Fetch workload list for dropdown (only if admin)
+  const { data: workloadList = [] } = useQuery({
+    queryKey: ["workload-current"],
     queryFn: async () => {
-      const { data } = await api.get("/auth/staff");
+      const { data } = await api.get("/workload/current");
       return data.data;
     },
     enabled: isAdmin,
   });
 
-  const parsePeriod = (p) => {
-    const yearMatch = p.match(/\d{4}/);
-    const year = yearMatch ? Number.parseInt(yearMatch[0]) : 0;
+  const staffWithWorkload = useMemo(() => {
+    return workloadList
+      .filter((item) => item.user)
+      .map((item) => ({
+        id: item.user.id,
+        name: item.user.name,
+        totalActive: item.totalActive,
+      }));
+  }, [workloadList]);
 
-    let month = 0;
-    let quarter = 0;
-    const mStr = p.toUpperCase();
 
-    if (mStr.includes("- 1") || mStr.includes("Q1")) quarter = 1;
-    else if (mStr.includes("- 2") || mStr.includes("Q2")) quarter = 2;
-    else if (mStr.includes("- 3") || mStr.includes("Q3")) quarter = 3;
-    else if (mStr.includes("- 4") || mStr.includes("Q4")) quarter = 4;
-    else if (mStr.includes("JAN")) month = 1;
-    else if (mStr.includes("FEB")) month = 2;
-    else if (mStr.includes("MAR")) month = 3;
-    else if (mStr.includes("APR")) month = 4;
-    else if (mStr.includes("MEI") || mStr.includes("MAY")) month = 5;
-    else if (mStr.includes("JUN")) month = 6;
-    else if (mStr.includes("JUL")) month = 7;
-    else if (mStr.includes("AGU") || mStr.includes("AUG")) month = 8;
-    else if (mStr.includes("SEP")) month = 9;
-    else if (mStr.includes("OKT") || mStr.includes("OCT")) month = 10;
-    else if (mStr.includes("NOV")) month = 11;
-    else if (mStr.includes("DES") || mStr.includes("DEC")) month = 12;
-
-    return { year, quarter, month };
-  };
 
   const { uniquePeriods, matrixData, obligationKeys } = useMemo(() => {
-    let periods = [...new Set(taxes.map((t) => t.period))].sort((a, b) => {
-      const dateA = parsePeriod(a);
-      const dateB = parsePeriod(b);
-      if (dateA.year !== dateB.year) return dateA.year - dateB.year;
-      if (dateA.quarter !== dateB.quarter) return dateA.quarter - dateB.quarter;
-      return dateA.month - dateB.month;
-    });
-
-    // Fallback if no periods exist but obligations do
-    if (periods.length === 0) {
-      if (activeTab === "1771 BADAN" || activeTab === "1770 OP") {
-        periods = ["TAHUNAN"];
-      } else {
-        periods = [
-          "JAN",
-          "FEB",
-          "MAR",
-          "APR",
-          "MEI",
-          "JUN",
-          "JUL",
-          "AGU",
-          "SEP",
-          "OKT",
-          "NOV",
-          "DES",
-        ];
-      }
+    let periods = [];
+    if (activeTab === "1771 BADAN" || activeTab === "1770 OP") {
+      periods = [`TAHUNAN ${selectedYear}`];
+    } else {
+      const months = [
+        "JANUARI", "FEBRUARI", "MARET", "APRIL", "MEI", "JUNI",
+        "JULI", "AGUSTUS", "SEPTEMBER", "OKTOBER", "NOVEMBER", "DESEMBER"
+      ];
+      periods = months.map((m) => `${m} ${selectedYear}`);
     }
 
     // First build period map by obligationId
@@ -130,7 +101,7 @@ const TaxMatrixView = ({ taxes, obligations, activeTab, onStatusChange }) => {
       matrixData: mData,
       obligationKeys: sortedObligationKeys,
     };
-  }, [taxes, obligations]);
+  }, [taxes, obligations, activeTab, selectedYear]);
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -177,9 +148,41 @@ const TaxMatrixView = ({ taxes, obligations, activeTab, onStatusChange }) => {
         }
       }
     };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    globalThis.addEventListener("keydown", handleKeyDown);
+    return () => globalThis.removeEventListener("keydown", handleKeyDown);
   }, [activeCell, matrixData, obligationKeys, uniquePeriods, onStatusChange]);
+
+  useEffect(() => {
+    if (!editingPic) return undefined;
+
+    const handleClickOutside = (event) => {
+      if (
+        picDropdownRef.current &&
+        !picDropdownRef.current.contains(event.target)
+      ) {
+        setEditingPic(null);
+      }
+    };
+
+    globalThis.addEventListener("mousedown", handleClickOutside);
+    return () => globalThis.removeEventListener("mousedown", handleClickOutside);
+  }, [editingPic]);
+
+  useEffect(() => {
+    if (highlightedCell?.obligationId && highlightedCell.period) {
+      const cellKey = `${highlightedCell.obligationId}-${highlightedCell.period}`;
+      const element = cellRefs.current[cellKey];
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+        element.classList.add('bg-amber-100', 'shadow-[inset_0_0_0_2px_#f59e0b]');
+        
+        setTimeout(() => {
+          element.classList.remove('bg-amber-100', 'shadow-[inset_0_0_0_2px_#f59e0b]');
+          if (clearHighlightedCell) clearHighlightedCell();
+        }, 3000);
+      }
+    }
+  }, [highlightedCell, clearHighlightedCell, uniquePeriods, obligationKeys]);
 
   const getStatusColor = (status) => {
     switch (status) {
@@ -243,16 +246,16 @@ const TaxMatrixView = ({ taxes, obligations, activeTab, onStatusChange }) => {
         <table className="w-full text-xs text-left bg-white border-collapse select-none">
           <thead className="font-bold tracking-wider uppercase bg-slate-50 text-slate-600">
             <tr>
-              <th className="px-4 py-3 sticky left-0 bg-slate-50 z-30 min-w-[200px] border-b border-r border-slate-200 shadow-[1px_0_0_0_#e2e8f0]">
+              <th className="px-4 py-3 sticky left-0 bg-slate-50 z-30 min-w-50 border-b border-r border-slate-200 shadow-[1px_0_0_0_#e2e8f0]">
                 Nama Klien
               </th>
-              <th className="px-3 py-3 border-b border-r border-slate-200 text-center w-[70px]">
+              <th className="px-3 py-3 border-b border-r border-slate-200 text-center w-17.5">
                 PIC
               </th>
               {uniquePeriods.map((period) => (
                 <th
                   key={period}
-                  className="px-2 py-3 text-center border-b border-r border-slate-200 min-w-[90px] text-[10px] text-slate-500"
+                  className="px-2 py-3 text-center border-b border-r border-slate-200 min-w-22.5 text-[10px] text-slate-500"
                 >
                   {period.replace(" ", "\n")}
                 </th>
@@ -297,32 +300,36 @@ const TaxMatrixView = ({ taxes, obligations, activeTab, onStatusChange }) => {
                         <div className="relative flex justify-center">
                           {editingPic?.obligationId ===
                           obligationInfo.obligationId ? (
-                            <div className="absolute z-50 top-0 bg-white border border-slate-200 shadow-xl rounded-lg p-2 min-w-[150px]">
+                            <div
+                              ref={picDropdownRef}
+                              className="absolute z-50 top-0 bg-white border border-slate-200 shadow-xl rounded-lg p-2 min-w-37.5"
+                            >
                               <select
                                 className="w-full text-[10px] p-1 border rounded mb-2"
                                 defaultValue={obligationInfo.picId || ""}
                                 onChange={async (e) => {
                                   const toUserId = e.target.value;
-                                  if (toUserId) {
-                                    await api.put(
-                                      `/tax/obligations/${obligationInfo.obligationId}/assign`,
-                                      {
-                                        toUserId,
-                                        reason: "Change from matrix row",
-                                      },
-                                    );
-                                    queryClient.invalidateQueries(["taxes"]);
-                                    queryClient.invalidateQueries([
-                                      "tax-obligations",
-                                    ]);
-                                    setEditingPic(null);
+                                  if (!toUserId) {
+                                    return;
                                   }
+                                  await api.put(
+                                    `/tax/obligations/${obligationInfo.obligationId}/assign`,
+                                    {
+                                      toUserId,
+                                      reason: "Change from matrix row",
+                                    },
+                                  );
+                                  queryClient.invalidateQueries(["taxes"]);
+                                  queryClient.invalidateQueries([
+                                    "tax-obligations",
+                                  ]);
+                                  setEditingPic(null);
                                 }}
                               >
                                 <option value="">Pilih PIC...</option>
-                                {staff.map((s) => (
+                                {staffWithWorkload.map((s) => (
                                   <option key={s.id} value={s.id}>
-                                    {s.name}
+                                    {s.name} ({s.totalActive} Task)
                                   </option>
                                 ))}
                               </select>
@@ -361,10 +368,11 @@ const TaxMatrixView = ({ taxes, obligations, activeTab, onStatusChange }) => {
                       return (
                         <td
                           key={period}
+                          ref={(el) => (cellRefs.current[`${obligationInfo.obligationId}-${period}`] = el)}
                           onClick={() =>
                             setActiveCell({ row: rowIndex, col: colIndex })
                           }
-                          onDoubleClick={() => {
+                          onDoubleClick={async () => {
                             if (cellData && cellData.status !== "COMPLETED") {
                               const allowed =
                                 VALID_TRANSITIONS[cellData.status] || [];
@@ -373,6 +381,17 @@ const TaxMatrixView = ({ taxes, obligations, activeTab, onStatusChange }) => {
                                   id: cellData.id,
                                   newStatus: "COMPLETED",
                                 });
+                              }
+                            } else if (!cellData) {
+                              try {
+                                await api.post("/tax/tasks", {
+                                  obligationId: obligationInfo.obligationId,
+                                  period: period,
+                                  status: "NOT_STARTED"
+                                });
+                                queryClient.invalidateQueries({ queryKey: ["taxes"] });
+                              } catch (err) {
+                                alert(err?.response?.data?.message || err.message);
                               }
                             }
                           }}

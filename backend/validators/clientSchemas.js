@@ -192,3 +192,40 @@ export const deleteFamilyMemberSchema = z.object({
     memberId: z.coerce.number().int().positive(),
   }),
 });
+
+// ─────────────────────────────────────────────
+// Credential schemas
+// ─────────────────────────────────────────────
+
+const credentialBodySchema = z.object({
+  label: z.string().trim().min(1, "Label wajib diisi").max(255),
+  value: z.string().trim().min(1, "Value wajib diisi").max(1000),
+  field_type: z.enum(["text", "password", "email", "number"]).default("text"),
+  sort_order: z.coerce.number().int().default(0),
+});
+
+export const addCredentialSchema = z.object({
+  params: z.object({ id: z.coerce.number().int().positive() }),
+  body: credentialBodySchema,
+});
+
+export const updateCredentialSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+    credId: z.coerce.number().int().positive(),
+  }),
+  body: credentialBodySchema.partial(),
+});
+
+export const deleteCredentialSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+    credId: z.coerce.number().int().positive(),
+  }),
+});
+
+export const deleteClientSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+  }),
+});

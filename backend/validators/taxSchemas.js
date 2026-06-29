@@ -105,3 +105,9 @@ export const assignObligationSchema = z.object({
     reason: z.string().trim().max(255).optional(),
   }),
 });
+
+export const getTaxRemindersSchema = z.object({
+  query: z.object({
+    daysAhead: z.coerce.number().int().positive().max(90).optional(),
+  }),
+});

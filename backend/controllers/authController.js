@@ -1,4 +1,4 @@
-import { registerUser, loginUser, listAllStaff } from "../services/authService.js";
+import { registerUser, loginUser, listAllStaff, listAllUsers } from "../services/authService.js";
 import { User } from "../models/index.js";
 import logger from "../utils/logger.js";
 import { setAuthCookie, clearAuthCookie } from "../utils/cookieAuth.js";
@@ -10,6 +10,16 @@ export const getStaffList = async (req, res) => {
   } catch (error) {
     logger.error(error, "Error in getStaffList");
     res.status(500).json({ error: "Gagal mengambil daftar staff" });
+  }
+};
+
+export const getUserList = async (req, res) => {
+  try {
+    const users = await listAllUsers();
+    res.status(200).json({ data: users });
+  } catch (error) {
+    logger.error(error, "Error in getUserList");
+    res.status(500).json({ error: "Gagal mengambil daftar user" });
   }
 };
 

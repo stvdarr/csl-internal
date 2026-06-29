@@ -3,8 +3,8 @@ import { env } from "../config/env.js";
 import { sequelize, User } from "../models/index.js";
 import { ROLES } from "../constants/roles.js";
 
-const name = env.SEED_ADMIN_NAME ?? "Administrator";
-const email = env.SEED_ADMIN_EMAIL ?? "admin@csl.local";
+const name = env.SEED_ADMIN_NAME ?? "Darren";
+const email = env.SEED_ADMIN_EMAIL ?? "stevendarren21375@gmail.com";
 const password = env.SEED_ADMIN_PASSWORD;
 
 if (!password) {

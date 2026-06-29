@@ -8,18 +8,19 @@ import MasterWorkbookUploader from "./MasterWorkbookUploader";
 import TaxMatrixView from "./TaxMatrixView";
 import TaxListView from "./TaxListView";
 import ManualObligationModal from "./ManualObligationModal";
+import TaxReminderBanner from "./TaxReminderBanner";
 import { CLEAR_ALL_TAX_CONFIRMATION } from "../../constants/destructiveActions";
 
 const TAX_FETCH_LIMIT = 100;
 
-const fetchTaxesForType = async (taxType) => {
+const fetchTaxesForType = async (taxType, year) => {
   const all = [];
   let page = 1;
   let totalPages = 1;
 
   while (page <= totalPages) {
     const { data } = await api.get("/tax", {
-      params: { taxType, page, limit: TAX_FETCH_LIMIT },
+      params: { taxType, year, page, limit: TAX_FETCH_LIMIT },
     });
     all.push(...data.data);
     totalPages = data.totalPages;
@@ -45,6 +46,8 @@ const TaxTracker = () => {
   const [activeTab, setActiveTab] = useState("PPN");
   const [viewMode, setViewMode] = useState("MATRIX");
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
+  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+  const [highlightedCell, setHighlightedCell] = useState(null); // { obligationId, period }
 
   const queryClient = useQueryClient();
 
@@ -79,15 +82,15 @@ const TaxTracker = () => {
   }, [queryClient]);
 
   const { data: taxes = [], isLoading: taxesLoading } = useQuery({
-    queryKey: ["taxes", activeTab],
-    queryFn: () => fetchTaxesForType(activeTab),
+    queryKey: ["taxes", activeTab, selectedYear],
+    queryFn: () => fetchTaxesForType(activeTab, selectedYear),
   });
 
   const { data: obligations = [], isLoading: obligationsLoading } = useQuery({
-    queryKey: ["tax-obligations", activeTab],
+    queryKey: ["tax-obligations", activeTab, selectedYear],
     queryFn: async () => {
       const { data } = await api.get("/tax/obligations", {
-        params: { taxType: activeTab },
+        params: { taxType: activeTab, year: selectedYear },
       });
       return data.data;
     },
@@ -101,14 +104,14 @@ const TaxTracker = () => {
     },
     onMutate: async ({ id, newStatus }) => {
       await queryClient.cancelQueries({ queryKey: ["taxes"] });
-      const previousTaxes = queryClient.getQueryData(["taxes", activeTab]);
-      queryClient.setQueryData(["taxes", activeTab], (old) =>
+      const previousTaxes = queryClient.getQueryData(["taxes", activeTab, selectedYear]);
+      queryClient.setQueryData(["taxes", activeTab, selectedYear], (old) =>
         old.map((tax) => (tax.id === id ? { ...tax, status: newStatus } : tax)),
       );
       return { previousTaxes };
     },
     onError: (err, _vars, context) => {
-      queryClient.setQueryData(["taxes", activeTab], context.previousTaxes);
+      queryClient.setQueryData(["taxes", activeTab, selectedYear], context.previousTaxes);
       alert(err.message);
     },
     onSettled: () => {
@@ -158,6 +161,17 @@ const TaxTracker = () => {
     }
   };
 
+  const handleNavigateToCell = (taxType, obligationId, period) => {
+    setActiveTab(taxType);
+    setViewMode("MATRIX");
+    setHighlightedCell({ obligationId, period });
+    
+    const yearMatch = period.match(/\d{4}/);
+    if (yearMatch) {
+      setSelectedYear(Number(yearMatch[0]));
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex flex-col items-center justify-center h-64 gap-4 text-slate-500">
@@ -169,6 +183,8 @@ const TaxTracker = () => {
 
   return (
     <div className="space-y-6">
+      <TaxReminderBanner onNavigateToCell={handleNavigateToCell} />
+      
       <div className="flex flex-wrap gap-2 p-2 bg-white border shadow-sm rounded-xl border-slate-200">
         {TAX_CATEGORIES.map((category) => (
           <button
@@ -213,9 +229,23 @@ const TaxTracker = () => {
         </div>
 
         <div className="flex p-1 border rounded-lg bg-slate-100 border-slate-200">
+          <select
+            value={selectedYear}
+            onChange={(e) => setSelectedYear(Number(e.target.value))}
+            className="bg-white border-r border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-700 outline-none rounded-l-md"
+          >
+            {[...Array(5)].map((_, i) => {
+              const year = new Date().getFullYear() - 2 + i;
+              return (
+                <option key={year} value={year}>
+                  {year}
+                </option>
+              );
+            })}
+          </select>
           <button
             onClick={() => setViewMode("LIST")}
-            className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold rounded-md transition-all ${
+            className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold transition-all ${
               viewMode === "LIST"
                 ? "bg-white shadow-sm text-blue-700"
                 : "text-slate-500 hover:text-slate-700"
@@ -225,7 +255,7 @@ const TaxTracker = () => {
           </button>
           <button
             onClick={() => setViewMode("MATRIX")}
-            className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold rounded-md transition-all ${
+            className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold rounded-r-md transition-all ${
               viewMode === "MATRIX"
                 ? "bg-blue-600 shadow-sm text-white"
                 : "text-slate-500 hover:text-slate-700"
@@ -242,7 +272,10 @@ const TaxTracker = () => {
             taxes={taxes}
             obligations={obligations}
             activeTab={activeTab}
+            selectedYear={selectedYear}
             onStatusChange={updateStatusMutation.mutate}
+            highlightedCell={highlightedCell}
+            clearHighlightedCell={() => setHighlightedCell(null)}
           />
         ) : (
           <TaxListView

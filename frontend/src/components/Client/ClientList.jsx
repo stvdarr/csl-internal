@@ -1,6 +1,6 @@
-import { Eye, Edit2, Building2, User2 } from "lucide-react";
+import { Eye, Edit2, Building2, User2, Trash2 } from "lucide-react";
 
-const ClientList = ({ clients, isLoading, onView, onEdit, isAdmin }) => {
+const ClientList = ({ clients, isLoading, onView, onEdit, onDelete, isAdmin }) => {
   if (isLoading) {
     return (
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
@@ -102,13 +102,20 @@ const ClientList = ({ clients, isLoading, onView, onEdit, isAdmin }) => {
                       >
                         <Eye className="w-4 h-4" />
                       </button>
-                      {isAdmin && (
+                      <button
+                        onClick={() => onEdit(client)}
+                        className="p-2 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
+                        title="Edit"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                      </button>
+                      {onDelete && (
                         <button
-                          onClick={() => onEdit(client)}
-                          className="p-2 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
-                          title="Edit"
+                          onClick={() => onDelete(client.id)}
+                          className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                          title="Hapus"
                         >
-                          <Edit2 className="w-4 h-4" />
+                          <Trash2 className="w-4 h-4" />
                         </button>
                       )}
                     </div>
